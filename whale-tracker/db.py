@@ -1,6 +1,6 @@
 """
 Whale Tracker - Database Module
-SQLite storage for whale trades and price snapshots.
+SQLite storage for whale trades and market cap snapshots.
 """
 
 import sqlite3
@@ -42,36 +42,28 @@ def init_db(db_path: str | Path | None = None):
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 token_address TEXT NOT NULL,
                 token_symbol TEXT,
-                token_name TEXT,
                 whale_address TEXT,
                 sol_amount REAL,
-                entry_price_usd REAL,
-                entry_price_sol REAL,
+                entry_mc REAL,
+                entry_liquidity REAL,
+                entry_volume_24h REAL,
                 entry_time TEXT NOT NULL,
-                network TEXT DEFAULT 'solana',
                 raw_alert TEXT,
                 created_at TEXT DEFAULT (datetime('now')),
 
                 -- 5 min check
-                price_5m_usd REAL,
-                price_5m_sol REAL,
+                mc_5m REAL,
                 checked_5m_at TEXT,
                 pct_change_5m REAL,
+                result_5m TEXT,
 
                 -- 15 min check
-                price_15m_usd REAL,
-                price_15m_sol REAL,
+                mc_15m REAL,
                 checked_15m_at TEXT,
                 pct_change_15m REAL,
-
-                -- Derived
-                result_5m TEXT,   -- 'win' | 'loss' | 'neutral'
                 result_15m TEXT,
 
-                -- Extra metadata from alerts
-                market_cap REAL,
-
-                UNIQUE(token_address, whale_address, entry_time)
+                UNIQUE(token_address, entry_time)
             );
 
             CREATE INDEX IF NOT EXISTS idx_trades_token ON trades(token_address);
@@ -79,48 +71,28 @@ def init_db(db_path: str | Path | None = None):
             CREATE INDEX IF NOT EXISTS idx_trades_checked_5m ON trades(checked_5m_at);
             CREATE INDEX IF NOT EXISTS idx_trades_checked_15m ON trades(checked_15m_at);
 
-            CREATE TABLE IF NOT EXISTS price_snapshots (
+            CREATE TABLE IF NOT EXISTS mc_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 token_address TEXT NOT NULL,
-                price_usd REAL,
-                price_sol REAL,
+                market_cap REAL,
                 liquidity_usd REAL,
                 volume_24h REAL,
                 fdv REAL,
-                source TEXT,  -- 'dexscreener' | 'geckoterminal'
+                price_usd REAL,
+                source TEXT,
                 snapshot_time TEXT DEFAULT (datetime('now'))
             );
 
-            CREATE INDEX IF NOT EXISTS idx_snapshots_token ON price_snapshots(token_address);
-
-            CREATE TABLE IF NOT EXISTS stats_cache (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                window_name TEXT NOT NULL,  -- 'all', '24h', '7d', '30d'
-                computed_at TEXT DEFAULT (datetime('now')),
-                total_trades INTEGER,
-                wins_5m INTEGER,
-                losses_5m INTEGER,
-                win_rate_5m REAL,
-                avg_return_5m REAL,
-                median_return_5m REAL,
-                wins_15m INTEGER,
-                losses_15m INTEGER,
-                win_rate_15m REAL,
-                avg_return_15m REAL,
-                median_return_15m REAL,
-                avg_sol_amount REAL,
-                top_tokens TEXT,  -- JSON
-                UNIQUE(window_name, computed_at)
-            );
+            CREATE INDEX IF NOT EXISTS idx_snapshots_token ON mc_snapshots(token_address);
         """)
 
 
 def insert_trade(conn: sqlite3.Connection, trade: dict) -> int:
     """Insert a new trade, return the row id."""
     cols = [
-        "token_address", "token_symbol", "token_name", "whale_address",
-        "sol_amount", "entry_price_usd", "entry_price_sol", "entry_time",
-        "network", "raw_alert", "market_cap"
+        "token_address", "token_symbol", "whale_address",
+        "sol_amount", "entry_mc", "entry_liquidity", "entry_volume_24h",
+        "entry_time", "raw_alert"
     ]
     vals = [trade.get(c) for c in cols]
     placeholders = ", ".join(["?"] * len(cols))
@@ -134,7 +106,7 @@ def insert_trade(conn: sqlite3.Connection, trade: dict) -> int:
 
 
 def get_unchecked_trades(conn: sqlite3.Connection, interval: str = "5m") -> list[dict]:
-    """Get trades that need a price check."""
+    """Get trades that need an MC check."""
     if interval == "5m":
         query = """
             SELECT * FROM trades
@@ -157,43 +129,41 @@ def get_unchecked_trades(conn: sqlite3.Connection, interval: str = "5m") -> list
     return [dict(r) for r in rows]
 
 
-def update_trade_price(
+def update_trade_mc(
     conn: sqlite3.Connection,
     trade_id: int,
     interval: str,
-    price_usd: float,
-    price_sol: float,
+    market_cap: float,
     pct_change: float,
     result: str
 ):
-    """Update a trade with price check results."""
+    """Update a trade with MC check results."""
     if interval == "5m":
         conn.execute("""
             UPDATE trades SET
-                price_5m_usd = ?, price_5m_sol = ?,
+                mc_5m = ?,
                 checked_5m_at = datetime('now'),
                 pct_change_5m = ?, result_5m = ?
             WHERE id = ?
-        """, (price_usd, price_sol, pct_change, result, trade_id))
+        """, (market_cap, pct_change, result, trade_id))
     elif interval == "15m":
         conn.execute("""
             UPDATE trades SET
-                price_15m_usd = ?, price_15m_sol = ?,
+                mc_15m = ?,
                 checked_15m_at = datetime('now'),
                 pct_change_15m = ?, result_15m = ?
             WHERE id = ?
-        """, (price_usd, price_sol, pct_change, result, trade_id))
+        """, (market_cap, pct_change, result, trade_id))
 
 
-def insert_price_snapshot(conn: sqlite3.Connection, snapshot: dict):
-    """Store a raw price snapshot."""
-    cols = ["token_address", "price_usd", "price_sol", "liquidity_usd",
-            "volume_24h", "fdv", "source"]
+def insert_mc_snapshot(conn: sqlite3.Connection, snapshot: dict):
+    """Store an MC snapshot."""
+    cols = ["token_address", "market_cap", "liquidity_usd", "volume_24h", "fdv", "price_usd", "source"]
     vals = [snapshot.get(c) for c in cols]
     placeholders = ", ".join(["?"] * len(cols))
     col_names = ", ".join(cols)
     conn.execute(
-        f"INSERT INTO price_snapshots ({col_names}) VALUES ({placeholders})",
+        f"INSERT INTO mc_snapshots ({col_names}) VALUES ({placeholders})",
         vals
     )
 
@@ -218,7 +188,8 @@ def get_stats(conn: sqlite3.Connection, window: str = "all") -> dict:
             SUM(CASE WHEN result_15m = 'win' THEN 1 ELSE 0 END) as wins_15m,
             SUM(CASE WHEN result_15m = 'loss' THEN 1 ELSE 0 END) as losses_15m,
             AVG(pct_change_15m) as avg_return_15m,
-            AVG(sol_amount) as avg_sol
+            AVG(sol_amount) as avg_sol,
+            AVG(entry_mc) as avg_entry_mc
         FROM trades {time_filter}
     """).fetchone()
 
@@ -239,6 +210,7 @@ def get_stats(conn: sqlite3.Connection, window: str = "all") -> dict:
             "avg_return": round(row["avg_return_15m"] or 0, 2),
         },
         "avg_sol": round(row["avg_sol"] or 0, 2),
+        "avg_entry_mc": round(row["avg_entry_mc"] or 0, 0),
     }
 
 

@@ -1,6 +1,6 @@
 """
 Whale Tracker - Main Tracker
-Orchestrates alert parsing, price checking, and stats.
+Orchestrates channel scraping, MC checking, and stats.
 """
 
 import asyncio
@@ -10,9 +10,8 @@ import yaml
 from pathlib import Path
 from datetime import datetime, timezone
 
-from db import db_session, init_db, insert_trade, get_unchecked_trades, update_trade_price, insert_price_snapshot, get_stats
-from price_fetcher import fetch_price
-from alert_parser import parse_alert, WhaleAlert
+from db import db_session, init_db, insert_trade, get_unchecked_trades, update_trade_mc, insert_mc_snapshot, get_stats
+from mc_fetcher import fetch_token_data, TokenData
 from channel_scraper import scrape_new_alerts, run_scraper_loop
 from stats import generate_report, format_stats
 
@@ -31,59 +30,65 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
-async def process_alert(alert: WhaleAlert, config: dict, db_path: str):
-    """Process a single whale alert: fetch entry price and store."""
-    if alert.sol_amount < config.get("min_sol", 3.0):
-        logger.debug(f"Skipping {alert.token_address[:8]} — only {alert.sol_amount} SOL")
+async def process_alert(alert, config: dict, db_path: str):
+    """Process a single whale alert: fetch MC and store."""
+    min_sol = config.get("min_sol", 2.0)
+    if alert.sol_amount < min_sol:
+        logger.debug(f"Skipping {alert.token_symbol or alert.token_address[:8]} — only {alert.sol_amount} SOL (< {min_sol})")
         return
 
-    logger.info(f"🐋 New whale buy: {alert.sol_amount} SOL → {alert.token_symbol or alert.token_address[:12]}")
+    symbol = alert.token_symbol or alert.token_address[:12]
+    logger.info(f"🐋 New whale buy: {alert.sol_amount} SOL → {symbol}")
 
-    # Fetch entry price
-    price = await fetch_price(
+    # Fetch token data (MC is the key metric)
+    data = await fetch_token_data(
         alert.token_address,
         prefer="dexscreener",
         rate_limit=config["apis"]["dexscreener"]["rate_limit_delay"]
     )
 
-    if not price or not price.price_usd:
-        logger.warning(f"Could not get entry price for {alert.token_address[:12]}, skipping")
+    if not data:
+        logger.warning(f"Could not get data for {symbol}, skipping")
+        return
+
+    # Use MC from API if available, fall back to alert's MC
+    entry_mc = data.market_cap or data.fdv or alert.market_cap
+    if not entry_mc:
+        logger.warning(f"No market cap data for {symbol}, skipping")
         return
 
     # Store trade
     trade = {
         "token_address": alert.token_address,
         "token_symbol": alert.token_symbol,
-        "token_name": alert.token_name,
         "whale_address": alert.whale_address,
         "sol_amount": alert.sol_amount,
-        "entry_price_usd": price.price_usd,
-        "entry_price_sol": price.price_sol,
+        "entry_mc": entry_mc,
+        "entry_liquidity": data.liquidity_usd,
+        "entry_volume_24h": data.volume_24h,
         "entry_time": alert.timestamp,
-        "network": config.get("network", "solana"),
         "raw_alert": alert.raw_text,
-        "market_cap": alert.market_cap,
     }
 
     with db_session(db_path) as conn:
         trade_id = insert_trade(conn, trade)
         if trade_id:
-            insert_price_snapshot(conn, {
+            insert_mc_snapshot(conn, {
                 "token_address": alert.token_address,
-                "price_usd": price.price_usd,
-                "price_sol": price.price_sol,
-                "liquidity_usd": price.liquidity_usd,
-                "volume_24h": price.volume_24h,
-                "fdv": price.fdv,
-                "source": price.source,
+                "market_cap": entry_mc,
+                "liquidity_usd": data.liquidity_usd,
+                "volume_24h": data.volume_24h,
+                "fdv": data.fdv,
+                "price_usd": data.price_usd,
+                "source": data.source,
             })
-            logger.info(f"  Stored trade #{trade_id} — entry ${price.price_usd:.8f}")
+            logger.info(f"  Stored trade #{trade_id} — MC ${entry_mc:,.0f}")
         else:
             logger.debug(f"  Duplicate trade, skipped")
 
 
-async def check_prices(config: dict, db_path: str):
-    """Check prices for trades at 5m and 15m marks."""
+async def check_mc_prices(config: dict, db_path: str):
+    """Check MC for trades at 5m and 15m marks."""
     win_threshold = config.get("win_threshold", 50.0)
 
     for interval in ["5m", "15m"]:
@@ -96,19 +101,23 @@ async def check_prices(config: dict, db_path: str):
         logger.info(f"Checking {len(unchecked)} trades at {interval} mark")
 
         for trade in unchecked:
-            price = await fetch_price(
+            data = await fetch_token_data(
                 trade["token_address"],
                 prefer="dexscreener",
                 rate_limit=config["apis"]["dexscreener"]["rate_limit_delay"]
             )
 
-            if not price or not price.price_usd:
-                logger.warning(f"  No price for {trade['token_address'][:12]} at {interval}")
+            if not data:
+                logger.warning(f"  No data for {trade['token_symbol'] or trade['token_address'][:8]} at {interval}")
                 continue
 
-            entry_price = trade["entry_price_usd"]
-            current_price = price.price_usd
-            pct_change = ((current_price - entry_price) / entry_price) * 100
+            current_mc = data.market_cap or data.fdv
+            if not current_mc:
+                logger.warning(f"  No MC for {trade['token_symbol'] or trade['token_address'][:8]} at {interval}")
+                continue
+
+            entry_mc = trade["entry_mc"]
+            pct_change = ((current_mc - entry_mc) / entry_mc) * 100
 
             if pct_change >= win_threshold:
                 result = "win"
@@ -120,37 +129,36 @@ async def check_prices(config: dict, db_path: str):
             symbol = trade.get("token_symbol") or trade["token_address"][:8]
 
             with db_session(db_path) as conn:
-                update_trade_price(
+                update_trade_mc(
                     conn, trade["id"], interval,
-                    price.price_usd, price.price_sol or 0,
-                    pct_change, result
+                    current_mc, pct_change, result
                 )
-                insert_price_snapshot(conn, {
+                insert_mc_snapshot(conn, {
                     "token_address": trade["token_address"],
-                    "price_usd": price.price_usd,
-                    "price_sol": price.price_sol,
-                    "liquidity_usd": price.liquidity_usd,
-                    "volume_24h": price.volume_24h,
-                    "fdv": price.fdv,
-                    "source": price.source,
+                    "market_cap": current_mc,
+                    "liquidity_usd": data.liquidity_usd,
+                    "volume_24h": data.volume_24h,
+                    "fdv": data.fdv,
+                    "price_usd": data.price_usd,
+                    "source": data.source,
                 })
 
             icon = "✅" if result == "win" else "📉" if result == "loss" else "➡️"
-            logger.info(f"  {symbol} @ {interval}: {pct_change:+.1f}% {icon}")
+            logger.info(f"  {symbol} @ {interval}: MC ${current_mc:,.0f} ({pct_change:+.1f}%) {icon}")
 
 
 async def run_tracker(config: dict, db_path: str, poll_interval: int = 30):
     """
-    Main loop: checks prices for pending trades.
-    Alerts are fed in via feed_alert() or the CLI.
+    Main loop: checks MC for pending trades.
+    Alerts are fed by the channel scraper.
     """
     logger.info("🐋 Whale Tracker started")
-    logger.info(f"  Min SOL: {config.get('min_sol', 3)}")
+    logger.info(f"  Min SOL: {config.get('min_sol', 2)}")
     logger.info(f"  Win threshold: {config.get('win_threshold', 50)}%")
 
     while True:
         try:
-            await check_prices(config, db_path)
+            await check_mc_prices(config, db_path)
         except Exception as e:
             logger.error(f"Error in check loop: {e}")
 
@@ -160,15 +168,16 @@ async def run_tracker(config: dict, db_path: str, poll_interval: int = 30):
             if stats["total_trades"] > 0:
                 logger.info(
                     f"📊 {stats['total_trades']} trades | "
-                    f"5m win rate: {stats['5m']['win_rate']}% | "
-                    f"15m win rate: {stats['15m']['win_rate']}%"
+                    f"5m wins: {stats['5m']['wins']} ({stats['5m']['win_rate']}%) | "
+                    f"15m wins: {stats['15m']['wins']} ({stats['15m']['win_rate']}%)"
                 )
 
         await asyncio.sleep(poll_interval)
 
 
 async def feed_alert(text: str, timestamp: str = None, config: dict = None, db_path: str = "whale_tracker.db"):
-    """Feed an alert text into the tracker. Call this from your scraper."""
+    """Feed an alert text into the tracker."""
+    from alert_parser import parse_alert
     if config is None:
         config = load_config()
 
@@ -184,24 +193,8 @@ def cli_report(db_path: str = "whale_tracker.db"):
     print(generate_report(db_path))
 
 
-def cli_feed(filepath: str, db_path: str = "whale_tracker.db"):
-    """Feed alerts from a file (one per line)."""
-    config = load_config()
-    init_db(db_path)
-
-    with open(filepath) as f:
-        lines = [l.strip() for l in f if l.strip()]
-
-    async def _process():
-        for line in lines:
-            await feed_alert(line, config=config, db_path=db_path)
-
-    asyncio.run(_process())
-    print(f"\nProcessed {len(lines)} lines")
-
-
 def cli_watch(db_path: str = "whale_tracker.db"):
-    """Run the scraper + price checker loop."""
+    """Run scraper + MC checker loop."""
     config = load_config()
     init_db(db_path)
 
@@ -212,7 +205,7 @@ def cli_watch(db_path: str = "whale_tracker.db"):
         scraper_task = asyncio.create_task(
             run_scraper_loop(
                 poll_interval=30,
-                min_sol=config.get("min_sol", 3.0),
+                min_sol=config.get("min_sol", 2.0),
                 callback=on_alert,
             )
         )
@@ -230,7 +223,7 @@ def cli_scrape_once(db_path: str = "whale_tracker.db"):
     init_db(db_path)
 
     async def _run():
-        alerts = await scrape_new_alerts(min_sol=config.get("min_sol", 3.0))
+        alerts = await scrape_new_alerts(min_sol=config.get("min_sol", 2.0))
         print(f"Found {len(alerts)} new alerts")
         for alert in alerts:
             await process_alert(alert, config, db_path)
@@ -246,18 +239,15 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage:")
         print("  python tracker.py report          — Show stats")
-        print("  python tracker.py feed <file>     — Feed alerts from file")
-        print("  python tracker.py watch           — Run scraper + price checker")
+        print("  python tracker.py watch           — Run scraper + MC checker")
         print("  python tracker.py scrape          — One-shot channel scrape")
-        print("  python tracker.py check           — One-shot price check")
+        print("  python tracker.py check           — One-shot MC check")
         sys.exit(0)
 
     cmd = sys.argv[1]
 
     if cmd == "report":
         cli_report()
-    elif cmd == "feed" and len(sys.argv) > 2:
-        cli_feed(sys.argv[2])
     elif cmd == "watch":
         cli_watch()
     elif cmd == "scrape":
@@ -265,7 +255,7 @@ if __name__ == "__main__":
     elif cmd == "check":
         config = load_config()
         init_db()
-        asyncio.run(check_prices(config, "whale_tracker.db"))
+        asyncio.run(check_mc_prices(config, "whale_tracker.db"))
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
