@@ -1,0 +1,30 @@
+# Whale Tracker Configuration
+
+# Minimum SOL amount to track
+min_sol: 3.0
+
+# Win threshold (percentage gain)
+win_threshold: 50.0
+
+# Price check intervals in seconds
+check_intervals:
+  - 300   # 5 minutes
+  - 900   # 15 minutes
+
+# API sources (priority order)
+apis:
+  dexscreener:
+    base_url: "https://api.dexscreener.com"
+    rate_limit_delay: 1.0  # seconds between calls
+  geckoterminal:
+    base_url: "https://api.geckoterminal.com/api/v2"
+    rate_limit_delay: 1.5
+
+# Solana network
+network: solana
+
+# Database
+database: whale_tracker.db
+
+# Logging
+log_level: INFO
