@@ -59,6 +59,7 @@ async def process_alert(alert, config: dict, db_path: str):
 
     # Store trade
     trade = {
+        "message_id": alert.message_id,
         "token_address": alert.token_address,
         "token_symbol": alert.token_symbol,
         "whale_address": alert.whale_address,
@@ -67,6 +68,7 @@ async def process_alert(alert, config: dict, db_path: str):
         "entry_liquidity": data.liquidity_usd,
         "entry_volume_24h": data.volume_24h,
         "entry_time": alert.timestamp,
+        "wallet_balance": alert.wallet_balance,
         "raw_alert": alert.raw_text,
     }
 

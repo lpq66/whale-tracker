@@ -22,8 +22,10 @@ class WhaleAlert:
     whale_address: str | None
     sol_amount: float
     market_cap: float | None
+    wallet_balance: float | None
     timestamp: str  # ISO format
     raw_text: str
+    message_id: str | None = None
 
 
 # Regex to validate Solana addresses
@@ -180,6 +182,7 @@ def parse_whale_tracker_alert(text: str, timestamp: str = None) -> WhaleAlert | 
         whale_address=whale_wallet,
         sol_amount=sol_amount,
         market_cap=market_cap,
+        wallet_balance=extract_wallet_balance(text),
         timestamp=timestamp,
         raw_text=text,
     )
@@ -213,6 +216,7 @@ def parse_generic_alert(text: str, timestamp: str = None) -> WhaleAlert | None:
         whale_address=None,
         sol_amount=sol_amount,
         market_cap=extract_market_cap(text),
+        wallet_balance=extract_wallet_balance(text),
         timestamp=timestamp,
         raw_text=text,
     )

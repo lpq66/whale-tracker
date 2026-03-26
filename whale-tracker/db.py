@@ -40,6 +40,7 @@ def init_db(db_path: str | Path | None = None):
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id TEXT,
                 token_address TEXT NOT NULL,
                 token_symbol TEXT,
                 whale_address TEXT,
@@ -48,6 +49,7 @@ def init_db(db_path: str | Path | None = None):
                 entry_liquidity REAL,
                 entry_volume_24h REAL,
                 entry_time TEXT NOT NULL,
+                wallet_balance REAL,
                 raw_alert TEXT,
                 created_at TEXT DEFAULT (datetime('now')),
 
@@ -63,7 +65,7 @@ def init_db(db_path: str | Path | None = None):
                 pct_change_15m REAL,
                 result_15m TEXT,
 
-                UNIQUE(token_address, entry_time)
+                UNIQUE(message_id)
             );
 
             CREATE INDEX IF NOT EXISTS idx_trades_token ON trades(token_address);
@@ -90,9 +92,9 @@ def init_db(db_path: str | Path | None = None):
 def insert_trade(conn: sqlite3.Connection, trade: dict) -> int:
     """Insert a new trade, return the row id."""
     cols = [
-        "token_address", "token_symbol", "whale_address",
+        "message_id", "token_address", "token_symbol", "whale_address",
         "sol_amount", "entry_mc", "entry_liquidity", "entry_volume_24h",
-        "entry_time", "raw_alert"
+        "entry_time", "wallet_balance", "raw_alert"
     ]
     vals = [trade.get(c) for c in cols]
     placeholders = ", ".join(["?"] * len(cols))

@@ -97,7 +97,7 @@ def extract_wallet_balance(text: str) -> float | None:
 
 def extract_message_id(url: str) -> str | None:
     """Extract message ID from telegram URL."""
-    match = re.search(r"t\.me/s/solwhaletrending/(\d+)", url)
+    match = re.search(r"t\.me/\w+/(\d+)", url)
     return match.group(1) if match else None
 
 
@@ -207,8 +207,10 @@ async def scrape_new_alerts(
             whale_address=None,
             sol_amount=alert["sol_amount"],
             market_cap=alert["market_cap"],
+            wallet_balance=alert.get("wallet_balance"),
             timestamp=timestamp,
             raw_text=alert["raw_text"],
+            message_id=msg_key,
         )
 
         new_alerts.append(whale_alert)
