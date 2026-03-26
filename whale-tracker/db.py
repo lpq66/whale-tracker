@@ -68,6 +68,9 @@ def init_db(db_path: str | Path | None = None):
                 result_5m TEXT,   -- 'win' | 'loss' | 'neutral'
                 result_15m TEXT,
 
+                -- Extra metadata from alerts
+                market_cap REAL,
+
                 UNIQUE(token_address, whale_address, entry_time)
             );
 

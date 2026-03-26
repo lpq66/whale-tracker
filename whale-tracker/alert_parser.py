@@ -8,7 +8,7 @@ Add your own patterns in ALERT_PATTERNS.
 
 import re
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -21,37 +21,10 @@ class WhaleAlert:
     token_name: str | None
     whale_address: str | None
     sol_amount: float
+    market_cap: float | None
     timestamp: str  # ISO format
     raw_text: str
 
-
-# Common patterns from whale alert channels
-# Add/modify these to match YOUR channel's format
-ALERT_PATTERNS = [
-    # Pattern: "🐋 Whale bought 5.2 SOL of TOKEN (SYMBOL) - <address>"
-    re.compile(
-        r"(?:🐋|🐳|WHALE|Whale).{0,20}"
-        r"(?:bought|aped|bought into|swap)"
-        r"\s+(?P<sol>[\d,.]+)\s*SOL\s+"
-        r"(?:of|into|on)\s+"
-        r"(?P<token_name>[A-Za-z0-9\s]+?)\s*"
-        r"(?:\((?P<symbol>[A-Z0-9]+)\))?\s*"
-        r"(?:[-–—]\s*)?"
-        r"(?P<address>[1-9A-HJ-NP-Za-km-z]{32,44})",
-        re.IGNORECASE
-    ),
-    # Pattern: "Bought 3.5 SOL | TOKEN | <address>"
-    re.compile(
-        r"[Bb]ought\s+(?P<sol>[\d,.]+)\s*SOL\s*[|]\s*"
-        r"(?P<symbol>[A-Z0-9]+)\s*[|]\s*"
-        r"(?P<address>[1-9A-HJ-NP-Za-km-z]{32,44})"
-    ),
-    # Pattern: Just a solana address with an amount
-    re.compile(
-        r"(?P<sol>[\d,.]+)\s*SOL\s+.*?"
-        r"(?P<address>[1-9A-HJ-NP-Za-km-z]{32,44})"
-    ),
-]
 
 # Regex to validate Solana addresses
 SOLANA_ADDRESS_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
@@ -63,63 +36,202 @@ def is_solana_address(addr: str) -> bool:
 
 def extract_addresses(text: str) -> list[str]:
     """Extract all potential Solana addresses from text."""
-    # Find all base58-looking strings of appropriate length
     candidates = re.findall(r"[1-9A-HJ-NP-Za-km-z]{32,44}", text)
     return [c for c in candidates if is_solana_address(c)]
 
 
-def parse_alert(text: str, timestamp: str | None = None) -> WhaleAlert | None:
+def extract_dexscreener_address(text: str) -> str | None:
+    """Extract token address from a DexScreener URL."""
+    match = re.search(r"dexscreener\.com/solana/([1-9A-HJ-NP-Za-km-z]{32,44})", text)
+    if match:
+        addr = match.group(1)
+        if is_solana_address(addr):
+            return addr
+    return None
+
+
+def extract_sol_amount(text: str) -> float | None:
     """
-    Parse a whale alert message.
-    Returns WhaleAlert if it matches, None otherwise.
+    Extract SOL amount from swap/buy patterns.
+    Prefers amounts near swap indicators (💸, ->, bought) over wallet balances.
     """
-    if not timestamp:
-        timestamp = datetime.now(timezone.utc).isoformat()
+    # Priority 1: amount after 💸 emoji (actual swap)
+    swap_match = re.search(r"💸\s*(?P<sol>[\d,.]+)\s*SOL", text)
+    if swap_match:
+        try:
+            return float(swap_match.group("sol").replace(",", ""))
+        except ValueError:
+            pass
 
-    # Try structured patterns first
-    for pattern in ALERT_PATTERNS:
-        match = pattern.search(text)
-        if match:
-            groups = match.groupdict()
-            try:
-                sol_amount = float(groups["sol"].replace(",", ""))
-            except (ValueError, KeyError):
-                continue
+    # Priority 2: "X.XX SOL →" pattern (swap direction)
+    arrow_match = re.search(r"(?P<sol>[\d,.]+)\s*SOL\s*→", text)
+    if arrow_match:
+        try:
+            return float(arrow_match.group("sol").replace(",", ""))
+        except ValueError:
+            pass
 
-            address = groups.get("address", "")
-            if not is_solana_address(address):
-                continue
+    # Priority 3: "bought X.XX SOL" or "aped X.XX SOL"
+    buy_match = re.search(r"(?:bought|aped|swap)\s+(?P<sol>[\d,.]+)\s*SOL", text, re.IGNORECASE)
+    if buy_match:
+        try:
+            return float(buy_match.group("sol").replace(",", ""))
+        except ValueError:
+            pass
 
-            return WhaleAlert(
-                token_address=address,
-                token_symbol=groups.get("symbol"),
-                token_name=groups.get("token_name", "").strip() or None,
-                whale_address=None,  # Most channels don't include this
-                sol_amount=sol_amount,
-                timestamp=timestamp,
-                raw_text=text,
-            )
-
-    # Fallback: look for SOL amounts near addresses
-    addresses = extract_addresses(text)
-    sol_match = re.search(r"(?P<sol>[\d,.]+)\s*SOL", text, re.IGNORECASE)
-
-    if addresses and sol_match:
-        sol_amount = float(sol_match.group("sol").replace(",", ""))
-        return WhaleAlert(
-            token_address=addresses[0],
-            token_symbol=None,
-            token_name=None,
-            whale_address=None,
-            sol_amount=sol_amount,
-            timestamp=timestamp,
-            raw_text=text,
-        )
+    # Fallback: any "X.XX SOL" that's NOT preceded by "Wallet:"
+    for match in re.finditer(r"(?P<sol>[\d,.]+)\s*SOL\b", text, re.IGNORECASE):
+        # Check if this is preceded by "wallet" within ~20 chars
+        start = max(0, match.start() - 30)
+        context = text[start:match.start()].lower()
+        if "wallet" in context:
+            continue
+        try:
+            return float(match.group("sol").replace(",", ""))
+        except ValueError:
+            pass
 
     return None
 
 
-def parse_alert_file(filepath: str) -> list[WhaleAlert]:
+def extract_market_cap(text: str) -> float | None:
+    """Extract market cap from patterns like 'MC: $117,789'."""
+    match = re.search(r"MC[:\s]*\$?([\d,.]+)\s*K?", text, re.IGNORECASE)
+    if match:
+        try:
+            val = float(match.group(1).replace(",", ""))
+            # Check if it says K (thousands)
+            after = text[match.end():match.end()+2]
+            if "K" in after.upper():
+                val *= 1000
+            return val
+        except ValueError:
+            pass
+    return None
+
+
+def extract_token_symbol(text: str) -> str | None:
+    """Extract token symbol from $SYMBOL pattern."""
+    match = re.search(r"\$([A-Z0-9]{2,20})", text)
+    if match:
+        return match.group(1)
+    return None
+
+
+def extract_whale_wallet(text: str) -> tuple[str | None, float | None]:
+    """Extract whale wallet address and their SOL balance."""
+    match = re.search(
+        r"[Ww]allet[:\s]*([\d,.]+)\s*SOL",
+        text
+    )
+    if match:
+        try:
+            balance = float(match.group(1).replace(",", ""))
+            # Also try to find the actual wallet address nearby
+            return None, balance
+        except ValueError:
+            pass
+    return None, None
+
+
+def parse_whale_tracker_alert(text: str, timestamp: str = None) -> WhaleAlert | None:
+    """
+    Parse the specific Whale Tracker Telegram channel format.
+    
+    Format example:
+        🐋 Whale alert
+        
+        🔗 [DEX URL](https://dexscreener.com/solana/<ADDRESS>)
+        <ADDRESS>
+        
+        ────────────
+        Source
+        ➕🐳 Whale Accumulating $SYMBOL!
+        🕒 Age: 3h
+        
+        🐳🐳 Wallet: 267 SOL
+        💸 4.78 SOL → 0.36% $SYMBOL
+        
+        💰 MC: $117,789 • 🔝 $202K
+        📈 Vol: $241K [1h]
+        👥 Hodls: 602 • 🤝 CTO
+    """
+    if not timestamp:
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+    # Must have a dexscreener link or SOL amount to be valid
+    token_address = extract_dexscreener_address(text)
+    sol_amount = extract_sol_amount(text)
+
+    if not token_address or not sol_amount:
+        return None
+
+    if sol_amount < 3.0:
+        return None
+
+    symbol = extract_token_symbol(text)
+    market_cap = extract_market_cap(text)
+    whale_wallet, _ = extract_whale_wallet(text)
+
+    return WhaleAlert(
+        token_address=token_address,
+        token_symbol=symbol,
+        token_name=None,
+        whale_address=whale_wallet,
+        sol_amount=sol_amount,
+        market_cap=market_cap,
+        timestamp=timestamp,
+        raw_text=text,
+    )
+
+
+def parse_generic_alert(text: str, timestamp: str = None) -> WhaleAlert | None:
+    """
+    Fallback: parse any message with a Solana address and SOL amount.
+    """
+    if not timestamp:
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+    sol_amount = extract_sol_amount(text)
+    if not sol_amount or sol_amount < 3.0:
+        return None
+
+    addresses = extract_addresses(text)
+    if not addresses:
+        return None
+
+    # Skip well-known addresses (SOL mint, etc.)
+    SKIP = {
+        "So11111111111111111111111111111111111111112",  # wSOL
+    }
+    token_addr = next((a for a in addresses if a not in SKIP), addresses[0])
+
+    return WhaleAlert(
+        token_address=token_addr,
+        token_symbol=extract_token_symbol(text),
+        token_name=None,
+        whale_address=None,
+        sol_amount=sol_amount,
+        market_cap=extract_market_cap(text),
+        timestamp=timestamp,
+        raw_text=text,
+    )
+
+
+def parse_alert(text: str, timestamp: str = None) -> WhaleAlert | None:
+    """
+    Try all parsers in order of specificity.
+    """
+    # Try Whale Tracker format first
+    result = parse_whale_tracker_alert(text, timestamp)
+    if result:
+        return result
+
+    # Fallback to generic
+    return parse_generic_alert(text, timestamp)
+
+
+def parse_alert_file(filepath: str, min_sol: float = 3.0) -> list[WhaleAlert]:
     """Parse a file with one alert per line. Useful for testing/backfill."""
     alerts = []
     with open(filepath) as f:
@@ -128,8 +240,6 @@ def parse_alert_file(filepath: str) -> list[WhaleAlert]:
             if not line:
                 continue
             alert = parse_alert(line)
-            if alert and alert.sol_amount >= 3.0:
+            if alert and alert.sol_amount >= min_sol:
                 alerts.append(alert)
-            elif alert:
-                logger.debug(f"Skipping alert with {alert.sol_amount} SOL (< 3.0)")
     return alerts

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from db import db_session, init_db, insert_trade, get_unchecked_trades, update_trade_price, insert_price_snapshot, get_stats
 from price_fetcher import fetch_price
 from alert_parser import parse_alert, WhaleAlert
+from channel_scraper import scrape_new_alerts, run_scraper_loop
 from stats import generate_report, format_stats
 
 logging.basicConfig(
@@ -199,10 +200,43 @@ def cli_feed(filepath: str, db_path: str = "whale_tracker.db"):
 
 
 def cli_watch(db_path: str = "whale_tracker.db"):
-    """Run the price checker loop."""
+    """Run the scraper + price checker loop."""
     config = load_config()
     init_db(db_path)
-    asyncio.run(run_tracker(config, db_path))
+
+    async def on_alert(alert):
+        await process_alert(alert, config, db_path)
+
+    async def _run():
+        scraper_task = asyncio.create_task(
+            run_scraper_loop(
+                poll_interval=30,
+                min_sol=config.get("min_sol", 3.0),
+                callback=on_alert,
+            )
+        )
+        checker_task = asyncio.create_task(
+            run_tracker(config, db_path)
+        )
+        await asyncio.gather(scraper_task, checker_task)
+
+    asyncio.run(_run())
+
+
+def cli_scrape_once(db_path: str = "whale_tracker.db"):
+    """One-shot scrape: get alerts from channel and process them."""
+    config = load_config()
+    init_db(db_path)
+
+    async def _run():
+        alerts = await scrape_new_alerts(min_sol=config.get("min_sol", 3.0))
+        print(f"Found {len(alerts)} new alerts")
+        for alert in alerts:
+            await process_alert(alert, config, db_path)
+            symbol = alert.token_symbol or alert.token_address[:8]
+            print(f"  🆕 {symbol} — {alert.sol_amount} SOL")
+
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":
@@ -212,7 +246,8 @@ if __name__ == "__main__":
         print("Usage:")
         print("  python tracker.py report          — Show stats")
         print("  python tracker.py feed <file>     — Feed alerts from file")
-        print("  python tracker.py watch           — Run price checker loop")
+        print("  python tracker.py watch           — Run scraper + price checker")
+        print("  python tracker.py scrape          — One-shot channel scrape")
         print("  python tracker.py check           — One-shot price check")
         sys.exit(0)
 
@@ -224,6 +259,8 @@ if __name__ == "__main__":
         cli_feed(sys.argv[2])
     elif cmd == "watch":
         cli_watch()
+    elif cmd == "scrape":
+        cli_scrape_once()
     elif cmd == "check":
         config = load_config()
         init_db()
