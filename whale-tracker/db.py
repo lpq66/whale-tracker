@@ -120,7 +120,7 @@ def insert_trade(conn: sqlite3.Connection, trade: dict) -> int:
     cols = [
         "token_address", "token_symbol", "token_name", "whale_address",
         "sol_amount", "entry_price_usd", "entry_price_sol", "entry_time",
-        "network", "raw_alert"
+        "network", "raw_alert", "market_cap"
     ]
     vals = [trade.get(c) for c in cols]
     placeholders = ", ".join(["?"] * len(cols))

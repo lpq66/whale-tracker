@@ -62,6 +62,7 @@ async def process_alert(alert: WhaleAlert, config: dict, db_path: str):
         "entry_time": alert.timestamp,
         "network": config.get("network", "solana"),
         "raw_alert": alert.raw_text,
+        "market_cap": alert.market_cap,
     }
 
     with db_session(db_path) as conn:
