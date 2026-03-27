@@ -252,12 +252,15 @@ def cli_report(db_path: str = "whale_tracker.db"):
         print("-" * 45)
         for t in recent:
             symbol = t.get("token_symbol") or t["token_address"][:8]
+            addr = t["token_address"]
             sol = t.get("sol_amount", 0)
             mc = t.get("entry_mc", 0)
             score = t.get("score", 0)
             entry = t.get("entry_time", "?")[:16]
             stars = "⭐" * score
+            dex_url = f"https://dexscreener.com/solana/{addr}"
             parts = [f"{symbol:12s} | {sol:5.1f} SOL | MC ${mc:>10,.0f} | {stars}"]
+            parts.append(f"  🔗 {dex_url}")
 
             if t.get("pct_change_5m") is not None:
                 chg5 = t["pct_change_5m"]
