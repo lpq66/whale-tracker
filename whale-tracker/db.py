@@ -45,11 +45,12 @@ def init_db(db_path: str | Path | None = None):
                 token_symbol TEXT,
                 whale_address TEXT,
                 sol_amount REAL,
+                wallet_balance REAL,
                 entry_mc REAL,
                 entry_liquidity REAL,
                 entry_volume_24h REAL,
                 entry_time TEXT NOT NULL,
-                wallet_balance REAL,
+                score INTEGER DEFAULT 0,
                 raw_alert TEXT,
                 created_at TEXT DEFAULT (datetime('now')),
 
@@ -72,6 +73,7 @@ def init_db(db_path: str | Path | None = None):
             CREATE INDEX IF NOT EXISTS idx_trades_entry ON trades(entry_time);
             CREATE INDEX IF NOT EXISTS idx_trades_checked_5m ON trades(checked_5m_at);
             CREATE INDEX IF NOT EXISTS idx_trades_checked_15m ON trades(checked_15m_at);
+            CREATE INDEX IF NOT EXISTS idx_trades_score ON trades(score);
 
             CREATE TABLE IF NOT EXISTS mc_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,8 +95,8 @@ def insert_trade(conn: sqlite3.Connection, trade: dict) -> int:
     """Insert a new trade, return the row id."""
     cols = [
         "message_id", "token_address", "token_symbol", "whale_address",
-        "sol_amount", "entry_mc", "entry_liquidity", "entry_volume_24h",
-        "entry_time", "wallet_balance", "raw_alert"
+        "sol_amount", "wallet_balance", "entry_mc", "entry_liquidity",
+        "entry_volume_24h", "entry_time", "score", "raw_alert"
     ]
     vals = [trade.get(c) for c in cols]
     placeholders = ", ".join(["?"] * len(cols))
@@ -105,6 +107,51 @@ def insert_trade(conn: sqlite3.Connection, trade: dict) -> int:
         vals
     )
     return cursor.lastrowid
+
+
+def token_seen_before(conn: sqlite3.Connection, token_address: str) -> bool:
+    """Check if this token was tracked before."""
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM trades WHERE token_address = ?",
+        (token_address,)
+    ).fetchone()
+    return row["cnt"] > 0
+
+
+def compute_score(
+    conn: sqlite3.Connection,
+    sol_amount: float,
+    wallet_balance: float | None,
+    entry_mc: float | None,
+    entry_liquidity: float | None,
+    token_address: str,
+    config: dict
+) -> int:
+    """Compute alert score based on multiple signals."""
+    scoring = config.get("scoring", {})
+    score = 0
+
+    # Big SOL buy
+    if sol_amount >= 10:
+        score += scoring.get("sol_boost", 1)
+
+    # Big wallet
+    if wallet_balance and wallet_balance >= 200:
+        score += scoring.get("wallet_boost", 1)
+
+    # Repeat token
+    if token_seen_before(conn, token_address):
+        score += scoring.get("repeat_token", 1)
+
+    # MC sweet spot ($50K - $500K)
+    if entry_mc and 50000 <= entry_mc <= 500000:
+        score += scoring.get("mc_sweet_spot", 1)
+
+    # Has liquidity
+    if entry_liquidity and entry_liquidity > 10000:
+        score += scoring.get("has_liquidity", 1)
+
+    return score
 
 
 def get_unchecked_trades(conn: sqlite3.Connection, interval: str = "5m") -> list[dict]:
@@ -191,7 +238,8 @@ def get_stats(conn: sqlite3.Connection, window: str = "all") -> dict:
             SUM(CASE WHEN result_15m = 'loss' THEN 1 ELSE 0 END) as losses_15m,
             AVG(pct_change_15m) as avg_return_15m,
             AVG(sol_amount) as avg_sol,
-            AVG(entry_mc) as avg_entry_mc
+            AVG(entry_mc) as avg_entry_mc,
+            AVG(score) as avg_score
         FROM trades {time_filter}
     """).fetchone()
 
@@ -213,6 +261,43 @@ def get_stats(conn: sqlite3.Connection, window: str = "all") -> dict:
         },
         "avg_sol": round(row["avg_sol"] or 0, 2),
         "avg_entry_mc": round(row["avg_entry_mc"] or 0, 0),
+        "avg_score": round(row["avg_score"] or 0, 1),
+    }
+
+
+def get_stats_by_score(conn: sqlite3.Connection, min_score: int = 3) -> dict:
+    """Stats filtered by minimum score."""
+    row = conn.execute("""
+        SELECT
+            COUNT(*) as total,
+            SUM(CASE WHEN result_5m = 'win' THEN 1 ELSE 0 END) as wins_5m,
+            SUM(CASE WHEN result_5m = 'loss' THEN 1 ELSE 0 END) as losses_5m,
+            AVG(pct_change_5m) as avg_return_5m,
+            SUM(CASE WHEN result_15m = 'win' THEN 1 ELSE 0 END) as wins_15m,
+            SUM(CASE WHEN result_15m = 'loss' THEN 1 ELSE 0 END) as losses_15m,
+            AVG(pct_change_15m) as avg_return_15m,
+            AVG(sol_amount) as avg_sol
+        FROM trades
+        WHERE score >= ?
+    """, (min_score,)).fetchone()
+
+    total = row["total"] or 0
+    return {
+        "min_score": min_score,
+        "total_trades": total,
+        "5m": {
+            "wins": row["wins_5m"] or 0,
+            "losses": row["losses_5m"] or 0,
+            "win_rate": round((row["wins_5m"] or 0) / max(total, 1) * 100, 1),
+            "avg_return": round(row["avg_return_5m"] or 0, 2),
+        },
+        "15m": {
+            "wins": row["wins_15m"] or 0,
+            "losses": row["losses_15m"] or 0,
+            "win_rate": round((row["wins_15m"] or 0) / max(total, 1) * 100, 1),
+            "avg_return": round(row["avg_return_15m"] or 0, 2),
+        },
+        "avg_sol": round(row["avg_sol"] or 0, 2),
     }
 
 

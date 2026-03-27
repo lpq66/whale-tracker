@@ -1,10 +1,28 @@
 # Whale Tracker Configuration
 
 # Minimum SOL amount to track
-min_sol: 2.0
+min_sol: 10.0
 
-# Win threshold (percentage gain)
-win_threshold: 50.0
+# Minimum wallet balance (SOL) to track
+min_wallet_balance: 150.0
+
+# Minimum market cap to track (skip dead tokens)
+min_mc: 50000
+
+# Minimum liquidity to track (can't sell if illiquid)
+min_liquidity: 10000
+
+# Win threshold (percentage MC gain)
+win_threshold: 30.0
+
+# Scoring weights
+scoring:
+  sol_boost: 1        # +1 if sol_amount >= 10
+  wallet_boost: 1     # +1 if wallet_balance >= 200
+  repeat_token: 1     # +1 if same token seen before
+  mc_sweet_spot: 1    # +1 if MC between 50K-500K
+  has_liquidity: 1    # +1 if liquidity > 10K
+  min_alert_score: 3  # only alert on score >= 3
 
 # Price check intervals in seconds
 check_intervals:
@@ -15,7 +33,7 @@ check_intervals:
 apis:
   dexscreener:
     base_url: "https://api.dexscreener.com"
-    rate_limit_delay: 1.0  # seconds between calls
+    rate_limit_delay: 1.0
   geckoterminal:
     base_url: "https://api.geckoterminal.com/api/v2"
     rate_limit_delay: 1.5

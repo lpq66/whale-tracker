@@ -1,6 +1,6 @@
 """
 Whale Tracker - Main Tracker
-Orchestrates channel scraping, MC checking, and stats.
+Orchestrates channel scraping, MC checking, scoring, and stats.
 """
 
 import asyncio
@@ -10,10 +10,13 @@ import yaml
 from pathlib import Path
 from datetime import datetime, timezone
 
-from db import db_session, init_db, insert_trade, get_unchecked_trades, update_trade_mc, insert_mc_snapshot, get_stats
+from db import (
+    db_session, init_db, insert_trade, get_unchecked_trades,
+    update_trade_mc, insert_mc_snapshot, get_stats, get_stats_by_score,
+    compute_score
+)
 from mc_fetcher import fetch_token_data, TokenData
 from channel_scraper import scrape_new_alerts, run_scraper_loop
-from stats import generate_report, format_stats
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,16 +34,25 @@ def load_config() -> dict:
 
 
 async def process_alert(alert, config: dict, db_path: str):
-    """Process a single whale alert: fetch MC and store."""
-    min_sol = config.get("min_sol", 2.0)
-    if alert.sol_amount < min_sol:
-        logger.debug(f"Skipping {alert.token_symbol or alert.token_address[:8]} — only {alert.sol_amount} SOL (< {min_sol})")
-        return
+    """Process a single whale alert: validate, score, fetch MC, store."""
+    min_sol = config.get("min_sol", 10.0)
+    min_wallet = config.get("min_wallet_balance", 150.0)
+    min_mc = config.get("min_mc", 50000)
+    min_liq = config.get("min_liquidity", 10000)
+    min_score = config.get("scoring", {}).get("min_alert_score", 3)
 
     symbol = alert.token_symbol or alert.token_address[:12]
-    logger.info(f"🐋 New whale buy: {alert.sol_amount} SOL → {symbol}")
 
-    # Fetch token data (MC is the key metric)
+    # --- Hard filters ---
+    if alert.sol_amount < min_sol:
+        logger.debug(f"Skip {symbol} — {alert.sol_amount:.1f} SOL < {min_sol}")
+        return
+
+    if alert.wallet_balance and alert.wallet_balance < min_wallet:
+        logger.debug(f"Skip {symbol} — wallet {alert.wallet_balance:.0f} SOL < {min_wallet}")
+        return
+
+    # Fetch token data
     data = await fetch_token_data(
         alert.token_address,
         prefer="dexscreener",
@@ -48,27 +60,54 @@ async def process_alert(alert, config: dict, db_path: str):
     )
 
     if not data:
-        logger.warning(f"Could not get data for {symbol}, skipping")
+        logger.warning(f"No data for {symbol}, skipping")
         return
 
-    # Use MC from API if available, fall back to alert's MC
     entry_mc = data.market_cap or data.fdv or alert.market_cap
     if not entry_mc:
-        logger.warning(f"No market cap data for {symbol}, skipping")
+        logger.warning(f"No MC for {symbol}, skipping")
         return
 
-    # Store trade
+    # MC filter
+    if entry_mc < min_mc:
+        logger.debug(f"Skip {symbol} — MC ${entry_mc:,.0f} < ${min_mc:,.0f}")
+        return
+
+    # Liquidity filter
+    if data.liquidity_usd and data.liquidity_usd < min_liq:
+        logger.debug(f"Skip {symbol} — liq ${data.liquidity_usd:,.0f} < ${min_liq:,.0f}")
+        return
+
+    # --- Compute score ---
+    with db_session(db_path) as conn:
+        score = compute_score(
+            conn,
+            sol_amount=alert.sol_amount,
+            wallet_balance=alert.wallet_balance,
+            entry_mc=entry_mc,
+            entry_liquidity=data.liquidity_usd,
+            token_address=alert.token_address,
+            config=config,
+        )
+
+    # Score filter
+    if score < min_score:
+        logger.debug(f"Skip {symbol} — score {score} < {min_score}")
+        return
+
+    # --- Store trade ---
     trade = {
         "message_id": alert.message_id,
         "token_address": alert.token_address,
         "token_symbol": alert.token_symbol,
         "whale_address": alert.whale_address,
         "sol_amount": alert.sol_amount,
+        "wallet_balance": alert.wallet_balance,
         "entry_mc": entry_mc,
         "entry_liquidity": data.liquidity_usd,
         "entry_volume_24h": data.volume_24h,
         "entry_time": alert.timestamp,
-        "wallet_balance": alert.wallet_balance,
+        "score": score,
         "raw_alert": alert.raw_text,
     }
 
@@ -84,14 +123,20 @@ async def process_alert(alert, config: dict, db_path: str):
                 "price_usd": data.price_usd,
                 "source": data.source,
             })
-            logger.info(f"  Stored trade #{trade_id} — MC ${entry_mc:,.0f}")
+            score_stars = "⭐" * score
+            logger.info(
+                f"🐋 {alert.sol_amount:.1f} SOL → {symbol} | "
+                f"MC ${entry_mc:,.0f} | "
+                f"wallet {alert.wallet_balance or '?'} SOL | "
+                f"score {score}/5 {score_stars}"
+            )
         else:
-            logger.debug(f"  Duplicate trade, skipped")
+            logger.debug(f"Duplicate: {symbol}")
 
 
 async def check_mc_prices(config: dict, db_path: str):
     """Check MC for trades at 5m and 15m marks."""
-    win_threshold = config.get("win_threshold", 50.0)
+    win_threshold = config.get("win_threshold", 30.0)
 
     for interval in ["5m", "15m"]:
         with db_session(db_path) as conn:
@@ -99,8 +144,6 @@ async def check_mc_prices(config: dict, db_path: str):
 
         if not unchecked:
             continue
-
-        logger.info(f"Checking {len(unchecked)} trades at {interval} mark")
 
         for trade in unchecked:
             data = await fetch_token_data(
@@ -110,12 +153,10 @@ async def check_mc_prices(config: dict, db_path: str):
             )
 
             if not data:
-                logger.warning(f"  No data for {trade['token_symbol'] or trade['token_address'][:8]} at {interval}")
                 continue
 
             current_mc = data.market_cap or data.fdv
             if not current_mc:
-                logger.warning(f"  No MC for {trade['token_symbol'] or trade['token_address'][:8]} at {interval}")
                 continue
 
             entry_mc = trade["entry_mc"]
@@ -150,13 +191,14 @@ async def check_mc_prices(config: dict, db_path: str):
 
 
 async def run_tracker(config: dict, db_path: str, poll_interval: int = 30):
-    """
-    Main loop: checks MC for pending trades.
-    Alerts are fed by the channel scraper.
-    """
+    """Main loop: checks MC for pending trades."""
     logger.info("🐋 Whale Tracker started")
-    logger.info(f"  Min SOL: {config.get('min_sol', 2)}")
-    logger.info(f"  Win threshold: {config.get('win_threshold', 50)}%")
+    logger.info(f"  Min SOL: {config.get('min_sol', 10)}")
+    logger.info(f"  Min wallet: {config.get('min_wallet_balance', 150)} SOL")
+    logger.info(f"  Min MC: ${config.get('min_mc', 50000):,}")
+    logger.info(f"  Min liquidity: ${config.get('min_liquidity', 10000):,}")
+    logger.info(f"  Win threshold: {config.get('win_threshold', 30)}%")
+    logger.info(f"  Min score: {config.get('scoring', {}).get('min_alert_score', 3)}/5")
 
     while True:
         try:
@@ -164,35 +206,71 @@ async def run_tracker(config: dict, db_path: str, poll_interval: int = 30):
         except Exception as e:
             logger.error(f"Error in check loop: {e}")
 
-        # Print periodic stats
         with db_session(db_path) as conn:
             stats = get_stats(conn, "all")
             if stats["total_trades"] > 0:
                 logger.info(
                     f"📊 {stats['total_trades']} trades | "
-                    f"5m wins: {stats['5m']['wins']} ({stats['5m']['win_rate']}%) | "
-                    f"15m wins: {stats['15m']['wins']} ({stats['15m']['win_rate']}%)"
+                    f"5m: {stats['5m']['wins']}W/{stats['5m']['losses']}L ({stats['5m']['win_rate']}%) | "
+                    f"15m: {stats['15m']['wins']}W/{stats['15m']['losses']}L ({stats['15m']['win_rate']}%) | "
+                    f"avg score: {stats['avg_score']}"
                 )
 
         await asyncio.sleep(poll_interval)
 
 
-async def feed_alert(text: str, timestamp: str = None, config: dict = None, db_path: str = "whale_tracker.db"):
-    """Feed an alert text into the tracker."""
-    from alert_parser import parse_alert
-    if config is None:
-        config = load_config()
-
-    alert = parse_alert(text, timestamp)
-    if alert:
-        await process_alert(alert, config, db_path)
-        return True
-    return False
-
-
 def cli_report(db_path: str = "whale_tracker.db"):
     """Print stats report to stdout."""
-    print(generate_report(db_path))
+    with db_session(db_path) as conn:
+        stats = get_stats(conn, "all")
+        score_stats = get_stats_by_score(conn, min_score=3)
+
+    print("=" * 45)
+    print("  🐋 WHALE TRACKER REPORT")
+    print("=" * 45)
+    print()
+    print(f"📊 All trades — {stats['total_trades']} total")
+    print(f"  Avg SOL: {stats['avg_sol']} | Avg MC: ${stats['avg_entry_mc']:,.0f} | Avg score: {stats['avg_score']}")
+    print()
+    print(f"  5m:  {stats['5m']['wins']}W / {stats['5m']['losses']}L — {stats['5m']['win_rate']}% win rate — avg {stats['5m']['avg_return']:+.1f}%")
+    print(f"  15m: {stats['15m']['wins']}W / {stats['15m']['losses']}L — {stats['15m']['win_rate']}% win rate — avg {stats['15m']['avg_return']:+.1f}%")
+    print()
+
+    if score_stats['total_trades'] > 0:
+        print(f"📊 Score 3+ only — {score_stats['total_trades']} trades")
+        print(f"  5m:  {score_stats['5m']['wins']}W / {score_stats['5m']['losses']}L — {score_stats['5m']['win_rate']}% — avg {score_stats['5m']['avg_return']:+.1f}%")
+        print(f"  15m: {score_stats['15m']['wins']}W / {score_stats['15m']['losses']}L — {score_stats['15m']['win_rate']}% — avg {score_stats['15m']['avg_return']:+.1f}%")
+        print()
+
+    # Recent trades
+    with db_session(db_path) as conn:
+        from db import get_recent_trades
+        recent = get_recent_trades(conn, limit=15)
+
+    if recent:
+        print("Recent trades:")
+        print("-" * 45)
+        for t in recent:
+            symbol = t.get("token_symbol") or t["token_address"][:8]
+            sol = t.get("sol_amount", 0)
+            mc = t.get("entry_mc", 0)
+            score = t.get("score", 0)
+            entry = t.get("entry_time", "?")[:16]
+            stars = "⭐" * score
+            parts = [f"{symbol:12s} | {sol:5.1f} SOL | MC ${mc:>10,.0f} | {stars}"]
+
+            if t.get("pct_change_5m") is not None:
+                chg5 = t["pct_change_5m"]
+                icon = "✅" if chg5 >= 30 else "📉" if chg5 < 0 else "➡️"
+                parts.append(f"  5m: {chg5:+.1f}% {icon}")
+
+            if t.get("pct_change_15m") is not None:
+                chg15 = t["pct_change_15m"]
+                icon = "✅" if chg15 >= 30 else "📉" if chg15 < 0 else "➡️"
+                parts.append(f"  15m: {chg15:+.1f}% {icon}")
+
+            print("\n".join(parts))
+            print()
 
 
 def cli_watch(db_path: str = "whale_tracker.db"):
@@ -207,7 +285,7 @@ def cli_watch(db_path: str = "whale_tracker.db"):
         scraper_task = asyncio.create_task(
             run_scraper_loop(
                 poll_interval=30,
-                min_sol=config.get("min_sol", 2.0),
+                min_sol=config.get("min_sol", 10.0),
                 callback=on_alert,
             )
         )
@@ -220,17 +298,15 @@ def cli_watch(db_path: str = "whale_tracker.db"):
 
 
 def cli_scrape_once(db_path: str = "whale_tracker.db"):
-    """One-shot scrape: get alerts from channel and process them."""
+    """One-shot scrape."""
     config = load_config()
     init_db(db_path)
 
     async def _run():
-        alerts = await scrape_new_alerts(min_sol=config.get("min_sol", 2.0))
+        alerts = await scrape_new_alerts(min_sol=config.get("min_sol", 10.0))
         print(f"Found {len(alerts)} new alerts")
         for alert in alerts:
             await process_alert(alert, config, db_path)
-            symbol = alert.token_symbol or alert.token_address[:8]
-            print(f"  🆕 {symbol} — {alert.sol_amount} SOL")
 
     asyncio.run(_run())
 
