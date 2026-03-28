@@ -4,9 +4,9 @@ Orchestrates channel scraping, MC checking, scoring, and stats.
 """
 
 import asyncio
+import json
 import logging
 import sys
-import yaml
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -25,12 +25,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("tracker")
 
-CONFIG_PATH = Path(__file__).parent / "config.yaml"
+CONFIG_PATH = Path(__file__).parent / "config.json"
 
 
 def load_config() -> dict:
     with open(CONFIG_PATH) as f:
-        return yaml.safe_load(f)
+        return json.load(f)
 
 
 async def process_alert(alert, config: dict, db_path: str):
