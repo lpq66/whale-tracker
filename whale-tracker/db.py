@@ -131,9 +131,11 @@ def compute_score(
     scoring = config.get("scoring", {})
     score = 0
 
-    # Big SOL buy
+    # SOL amount tiers (stackable)
+    if sol_amount >= 5:
+        score += scoring.get("sol_5plus", 1)
     if sol_amount >= 10:
-        score += scoring.get("sol_boost", 1)
+        score += scoring.get("sol_10plus", 1)
 
     # Big wallet
     if wallet_balance and wallet_balance >= 200:
@@ -152,6 +154,16 @@ def compute_score(
         score += scoring.get("has_liquidity", 1)
 
     return score
+
+
+def compute_tier(sol_amount: float) -> str:
+    """Tier classification for display."""
+    if sol_amount >= 10:
+        return "T3"  # high conviction
+    elif sol_amount >= 5:
+        return "T2"  # alert tier
+    else:
+        return "T1"  # tracking only
 
 
 def get_unchecked_trades(conn: sqlite3.Connection, interval: str = "5m") -> list[dict]:

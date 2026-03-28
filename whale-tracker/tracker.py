@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from db import (
     db_session, init_db, insert_trade, get_unchecked_trades,
     update_trade_mc, insert_mc_snapshot, get_stats, get_stats_by_score,
-    compute_score
+    compute_score, compute_tier
 )
 from mc_fetcher import fetch_token_data, TokenData
 from channel_scraper import scrape_new_alerts, run_scraper_loop
@@ -35,7 +35,8 @@ def load_config() -> dict:
 
 async def process_alert(alert, config: dict, db_path: str):
     """Process a single whale alert: validate, score, fetch MC, store."""
-    min_sol = config.get("min_sol", 10.0)
+    min_sol = config.get("min_sol", 3.0)
+    alert_min_sol = config.get("alert_min_sol", 5.0)
     min_wallet = config.get("min_wallet_balance", 150.0)
     min_mc = config.get("min_mc", 50000)
     min_liq = config.get("min_liquidity", 10000)
@@ -43,7 +44,7 @@ async def process_alert(alert, config: dict, db_path: str):
 
     symbol = alert.token_symbol or alert.token_address[:12]
 
-    # --- Hard filters ---
+    # --- Hard filters (data collection) ---
     if alert.sol_amount < min_sol:
         logger.debug(f"Skip {symbol} — {alert.sol_amount:.1f} SOL < {min_sol}")
         return
@@ -123,9 +124,12 @@ async def process_alert(alert, config: dict, db_path: str):
                 "price_usd": data.price_usd,
                 "source": data.source,
             })
+            tier = compute_tier(alert.sol_amount)
             score_stars = "⭐" * score
+            is_alert = score >= min_score
+            prefix = "🐋" if is_alert else "📋"
             logger.info(
-                f"🐋 {alert.sol_amount:.1f} SOL → {symbol} | "
+                f"{prefix} [{tier}] {alert.sol_amount:.1f} SOL → {symbol} | "
                 f"MC ${entry_mc:,.0f} | "
                 f"wallet {alert.wallet_balance or '?'} SOL | "
                 f"score {score}/5 {score_stars}"
@@ -244,7 +248,7 @@ def cli_report(db_path: str = "whale_tracker.db"):
 
     # Recent trades
     with db_session(db_path) as conn:
-        from db import get_recent_trades
+        from db import get_recent_trades, compute_tier
         recent = get_recent_trades(conn, limit=15)
 
     if recent:
@@ -256,10 +260,10 @@ def cli_report(db_path: str = "whale_tracker.db"):
             sol = t.get("sol_amount", 0)
             mc = t.get("entry_mc", 0)
             score = t.get("score", 0)
-            entry = t.get("entry_time", "?")[:16]
+            tier = compute_tier(sol)
             stars = "⭐" * score
             dex_url = f"https://dexscreener.com/solana/{addr}"
-            parts = [f"{symbol:12s} | {sol:5.1f} SOL | MC ${mc:>10,.0f} | {stars}"]
+            parts = [f"[{tier}] {symbol:12s} | {sol:5.1f} SOL | MC ${mc:>10,.0f} | {stars}"]
             parts.append(f"  🔗 {dex_url}")
 
             if t.get("pct_change_5m") is not None:
