@@ -88,6 +88,56 @@ def init_db(db_path: str | Path | None = None):
             );
 
             CREATE INDEX IF NOT EXISTS idx_snapshots_token ON mc_snapshots(token_address);
+
+            CREATE TABLE IF NOT EXISTS all_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id TEXT,
+                token_address TEXT NOT NULL,
+                token_symbol TEXT,
+                sol_amount REAL,
+                wallet_balance REAL,
+                market_cap REAL,
+                liquidity_usd REAL,
+                volume_24h REAL,
+                raw_alert TEXT,
+                filtered_out INTEGER DEFAULT 0,
+                filter_reason TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_all_alerts_token ON all_alerts(token_address);
+            CREATE INDEX IF NOT EXISTS idx_all_alerts_created ON all_alerts(created_at);
+
+            CREATE TABLE IF NOT EXISTS watchlist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_address TEXT NOT NULL UNIQUE,
+                token_symbol TEXT,
+                source TEXT DEFAULT 'early_trending',
+                trending_mc REAL,
+                trending_liquidity REAL,
+                trending_holders INTEGER,
+                trending_volume_1h REAL,
+                first_seen TEXT DEFAULT (datetime('now')),
+                last_checked TEXT,
+                status TEXT DEFAULT 'watching',
+                -- watching | triggered | expired | dead
+
+                -- Momentum snapshots
+                check_count INTEGER DEFAULT 0,
+                latest_mc REAL,
+                latest_liquidity REAL,
+                latest_holders INTEGER,
+                latest_volume_1h REAL,
+                peak_mc REAL,
+
+                -- Signal
+                triggered_at TEXT,
+                trigger_mc REAL,
+                trigger_reason TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_watchlist_status ON watchlist(status);
+            CREATE INDEX IF NOT EXISTS idx_watchlist_seen ON watchlist(first_seen);
         """)
 
 
@@ -116,6 +166,109 @@ def token_seen_before(conn: sqlite3.Connection, token_address: str) -> bool:
         (token_address,)
     ).fetchone()
     return row["cnt"] > 0
+
+
+def token_seen_recently(conn: sqlite3.Connection, token_address: str, window_minutes: int = 30) -> bool:
+    """Check if this token was alerted within the dedup window."""
+    row = conn.execute("""
+        SELECT COUNT(*) as cnt FROM all_alerts
+        WHERE token_address = ?
+        AND datetime(created_at) >= datetime('now', ?)
+    """, (token_address, f"-{window_minutes} minutes")).fetchone()
+    return row["cnt"] > 0
+
+
+def insert_all_alert(conn: sqlite3.Connection, alert_data: dict) -> int:
+    """Log every alert (filtered or not) for pattern analysis."""
+    cols = [
+        "message_id", "token_address", "token_symbol",
+        "sol_amount", "wallet_balance", "market_cap",
+        "liquidity_usd", "volume_24h", "raw_alert",
+        "filtered_out", "filter_reason"
+    ]
+    vals = [alert_data.get(c) for c in cols]
+    placeholders = ", ".join(["?"] * len(cols))
+    col_names = ", ".join(cols)
+    cursor = conn.execute(
+        f"INSERT INTO all_alerts ({col_names}) VALUES ({placeholders})",
+        vals
+    )
+    return cursor.lastrowid
+
+
+def add_to_watchlist(conn: sqlite3.Connection, token: dict) -> int:
+    """Add a token to the momentum watchlist (skip if already watching)."""
+    try:
+        cursor = conn.execute("""
+            INSERT INTO watchlist (
+                token_address, token_symbol, source,
+                trending_mc, trending_liquidity, trending_holders, trending_volume_1h
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            token["token_address"],
+            token.get("token_symbol"),
+            token.get("source", "early_trending"),
+            token.get("mc"),
+            token.get("liquidity"),
+            token.get("holders"),
+            token.get("volume_1h"),
+        ))
+        return cursor.lastrowid
+    except sqlite3.IntegrityError:
+        return 0  # Already exists
+
+
+def get_watchlist(conn: sqlite3.Connection, status: str = "watching") -> list[dict]:
+    """Get active watchlist tokens."""
+    rows = conn.execute("""
+        SELECT * FROM watchlist
+        WHERE status = ?
+        ORDER BY first_seen DESC
+    """, (status,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_watchlist_check(conn: sqlite3.Connection, token_address: str, data: dict):
+    """Update momentum check results for a watchlist token."""
+    conn.execute("""
+        UPDATE watchlist SET
+            last_checked = datetime('now'),
+            check_count = check_count + 1,
+            latest_mc = ?,
+            latest_liquidity = ?,
+            latest_holders = ?,
+            latest_volume_1h = ?,
+            peak_mc = MAX(COALESCE(peak_mc, 0), ?)
+        WHERE token_address = ?
+    """, (
+        data.get("mc"),
+        data.get("liquidity"),
+        data.get("holders"),
+        data.get("volume_1h"),
+        data.get("mc", 0),
+        token_address,
+    ))
+
+
+def trigger_watchlist(conn: sqlite3.Connection, token_address: str, mc: float, reason: str):
+    """Mark a watchlist token as triggered (buy signal)."""
+    conn.execute("""
+        UPDATE watchlist SET
+            status = 'triggered',
+            triggered_at = datetime('now'),
+            trigger_mc = ?,
+            trigger_reason = ?
+        WHERE token_address = ?
+    """, (mc, reason, token_address))
+
+
+def expire_old_watchlist(conn: sqlite3.Connection, ttl_minutes: int = 240):
+    """Expire watchlist tokens older than TTL."""
+    conn.execute("""
+        UPDATE watchlist SET status = 'expired'
+        WHERE status = 'watching'
+        AND datetime(first_seen) <= datetime('now', ?)
+    """, (f"-{ttl_minutes} minutes",))
 
 
 def compute_score(

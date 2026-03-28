@@ -19,6 +19,7 @@ class TokenData:
     fdv: float | None
     liquidity_usd: float | None
     volume_24h: float | None
+    volume_1h: float | None
     price_usd: float | None
     source: str
 
@@ -56,6 +57,7 @@ async def fetch_dexscreener(token_address: str) -> TokenData | None:
             fdv=float(fdv) if fdv else None,
             liquidity_usd=float(liquidity.get("usd", 0)) or None,
             volume_24h=float(volume.get("h24", 0)) or None,
+            volume_1h=float(volume.get("h1", 0)) or None,
             price_usd=float(pair.get("priceUsd", 0)) or None,
             source="dexscreener",
         )
@@ -84,6 +86,7 @@ async def fetch_geckoterminal(token_address: str) -> TokenData | None:
             fdv=float(attrs.get("fdv_usd", 0)) or None,
             liquidity_usd=None,
             volume_24h=float(attrs.get("volume_usd", {}).get("h24", 0)) or None,
+            volume_1h=float(attrs.get("volume_usd", {}).get("h1", 0)) or None,
             price_usd=float(attrs.get("price_usd", 0)) or None,
             source="geckoterminal",
         )

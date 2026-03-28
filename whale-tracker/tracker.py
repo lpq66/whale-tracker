@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from db import (
     db_session, init_db, insert_trade, get_unchecked_trades,
     update_trade_mc, insert_mc_snapshot, get_stats, get_stats_by_score,
-    compute_score, compute_tier
+    compute_score, compute_tier, insert_all_alert, token_seen_recently
 )
 from mc_fetcher import fetch_token_data, TokenData
 from channel_scraper import scrape_new_alerts, run_scraper_loop
@@ -36,22 +36,58 @@ def load_config() -> dict:
 async def process_alert(alert, config: dict, db_path: str):
     """Process a single whale alert: validate, score, fetch MC, store."""
     min_sol = config.get("min_sol", 3.0)
-    alert_min_sol = config.get("alert_min_sol", 5.0)
     min_wallet = config.get("min_wallet_balance", 150.0)
     min_mc = config.get("min_mc", 50000)
+    max_mc = config.get("max_mc", 500000)
     min_liq = config.get("min_liquidity", 10000)
+    min_liq_ratio = config.get("min_liq_ratio", 0.05)
+    min_position_pct = config.get("min_position_pct", 0.01)
+    dedup_window = config.get("dedup_window_minutes", 30)
     min_score = config.get("scoring", {}).get("min_alert_score", 3)
 
     symbol = alert.token_symbol or alert.token_address[:12]
 
+    def log_all(filtered_out=False, filter_reason=None, entry_mc=None, liq=None, vol=None):
+        """Log every alert to all_alerts table for pattern analysis."""
+        with db_session(db_path) as conn:
+            insert_all_alert(conn, {
+                "message_id": alert.message_id,
+                "token_address": alert.token_address,
+                "token_symbol": alert.token_symbol,
+                "sol_amount": alert.sol_amount,
+                "wallet_balance": alert.wallet_balance,
+                "market_cap": entry_mc,
+                "liquidity_usd": liq,
+                "volume_24h": vol,
+                "raw_alert": alert.raw_text,
+                "filtered_out": 1 if filtered_out else 0,
+                "filter_reason": filter_reason,
+            })
+
     # --- Hard filters (data collection) ---
     if alert.sol_amount < min_sol:
-        logger.debug(f"Skip {symbol} — {alert.sol_amount:.1f} SOL < {min_sol}")
+        log_all(True, f"sol_under_{min_sol}")
         return
 
     if alert.wallet_balance and alert.wallet_balance < min_wallet:
-        logger.debug(f"Skip {symbol} — wallet {alert.wallet_balance:.0f} SOL < {min_wallet}")
+        log_all(True, f"wallet_under_{min_wallet}")
         return
+
+    # Position size vs wallet filter (skip dust buys)
+    if alert.wallet_balance and alert.wallet_balance > 0:
+        position_pct = alert.sol_amount / alert.wallet_balance
+        if position_pct < min_position_pct:
+            log_all(True, f"position_pct_{position_pct:.4f}_under_{min_position_pct}")
+            logger.debug(f"Skip {symbol} — position {position_pct:.2%} of wallet < {min_position_pct:.0%}")
+            return
+
+    # Token dedup window (skip same token if seen recently)
+    if dedup_window > 0:
+        with db_session(db_path) as conn:
+            if token_seen_recently(conn, alert.token_address, dedup_window):
+                log_all(True, f"dedup_within_{dedup_window}m")
+                logger.debug(f"Skip {symbol} — already seen within {dedup_window}m")
+                return
 
     # Fetch token data
     data = await fetch_token_data(
@@ -61,23 +97,40 @@ async def process_alert(alert, config: dict, db_path: str):
     )
 
     if not data:
+        log_all(True, "no_data")
         logger.warning(f"No data for {symbol}, skipping")
         return
 
     entry_mc = data.market_cap or data.fdv or alert.market_cap
     if not entry_mc:
+        log_all(True, "no_mc")
         logger.warning(f"No MC for {symbol}, skipping")
         return
 
-    # MC filter
+    # MC range filters
     if entry_mc < min_mc:
+        log_all(True, f"mc_under_{min_mc}", entry_mc=entry_mc, liq=data.liquidity_usd, vol=data.volume_24h)
         logger.debug(f"Skip {symbol} — MC ${entry_mc:,.0f} < ${min_mc:,.0f}")
+        return
+
+    if entry_mc > max_mc:
+        log_all(True, f"mc_over_{max_mc}", entry_mc=entry_mc, liq=data.liquidity_usd, vol=data.volume_24h)
+        logger.debug(f"Skip {symbol} — MC ${entry_mc:,.0f} > ${max_mc:,.0f}")
         return
 
     # Liquidity filter
     if data.liquidity_usd and data.liquidity_usd < min_liq:
+        log_all(True, f"liq_under_{min_liq}", entry_mc=entry_mc, liq=data.liquidity_usd, vol=data.volume_24h)
         logger.debug(f"Skip {symbol} — liq ${data.liquidity_usd:,.0f} < ${min_liq:,.0f}")
         return
+
+    # Liquidity ratio filter (liq/mc)
+    if data.liquidity_usd and entry_mc > 0:
+        liq_ratio = data.liquidity_usd / entry_mc
+        if liq_ratio < min_liq_ratio:
+            log_all(True, f"liq_ratio_{liq_ratio:.3f}_under_{min_liq_ratio}", entry_mc=entry_mc, liq=data.liquidity_usd, vol=data.volume_24h)
+            logger.debug(f"Skip {symbol} — liq ratio {liq_ratio:.1%} < {min_liq_ratio:.0%}")
+            return
 
     # --- Compute score ---
     with db_session(db_path) as conn:
@@ -93,8 +146,12 @@ async def process_alert(alert, config: dict, db_path: str):
 
     # Score filter
     if score < min_score:
+        log_all(True, f"score_{score}_under_{min_score}", entry_mc=entry_mc, liq=data.liquidity_usd, vol=data.volume_24h)
         logger.debug(f"Skip {symbol} — score {score} < {min_score}")
         return
+
+    # --- Passed all filters — log as good alert ---
+    log_all(False, None, entry_mc=entry_mc, liq=data.liquidity_usd, vol=data.volume_24h)
 
     # --- Store trade ---
     trade = {
@@ -199,8 +256,11 @@ async def run_tracker(config: dict, db_path: str, poll_interval: int = 30):
     logger.info("🐋 Whale Tracker started")
     logger.info(f"  Min SOL: {config.get('min_sol', 10)}")
     logger.info(f"  Min wallet: {config.get('min_wallet_balance', 150)} SOL")
-    logger.info(f"  Min MC: ${config.get('min_mc', 50000):,}")
+    logger.info(f"  MC range: ${config.get('min_mc', 50000):,} - ${config.get('max_mc', 500000):,}")
     logger.info(f"  Min liquidity: ${config.get('min_liquidity', 10000):,}")
+    logger.info(f"  Min liq ratio: {config.get('min_liq_ratio', 0.05):.0%}")
+    logger.info(f"  Min position pct: {config.get('min_position_pct', 0.01):.0%} of wallet")
+    logger.info(f"  Dedup window: {config.get('dedup_window_minutes', 30)}m")
     logger.info(f"  Win threshold: {config.get('win_threshold', 30)}%")
     logger.info(f"  Min score: {config.get('scoring', {}).get('min_alert_score', 3)}/5")
 
@@ -289,17 +349,28 @@ def cli_watch(db_path: str = "whale_tracker.db"):
         await process_alert(alert, config, db_path)
 
     async def _run():
-        scraper_task = asyncio.create_task(
-            run_scraper_loop(
-                poll_interval=30,
-                min_sol=config.get("min_sol", 10.0),
-                callback=on_alert,
-            )
-        )
-        checker_task = asyncio.create_task(
-            run_tracker(config, db_path)
-        )
-        await asyncio.gather(scraper_task, checker_task)
+        tasks = [
+            asyncio.create_task(
+                run_scraper_loop(
+                    poll_interval=30,
+                    min_sol=config.get("min_sol", 10.0),
+                    callback=on_alert,
+                )
+            ),
+            asyncio.create_task(
+                run_tracker(config, db_path)
+            ),
+        ]
+
+        # Add momentum monitor if enabled
+        if config.get("momentum", {}).get("enabled", False):
+            from momentum_monitor import run_momentum_monitor
+            tasks.append(asyncio.create_task(
+                run_momentum_monitor(config, db_path)
+            ))
+            logger.info("🔍 Momentum monitor enabled")
+
+        await asyncio.gather(*tasks)
 
     asyncio.run(_run())
 
