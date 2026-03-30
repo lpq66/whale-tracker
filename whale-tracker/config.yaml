@@ -101,13 +101,13 @@ momentum:
     # Minimum holder count
     min_holders: 300
 
-    # MC must be in this range (tighter: $100K-300K)
-    min_mc: 100000
-    max_mc: 300000
+    # MC must be in this range (original range)
+    min_mc: 50000
+    max_mc: 500000
 
     # Minimum liquidity (USD)
-    min_liquidity: 20000
+    min_liquidity: 15000
 
-    # Liquidity ratio (liq/mc) — avoid 15-25% zone (worst win rate)
+    # Liquidity ratio (liq/mc) — 25-35% is the sweet spot
     min_liq_ratio: 0.25
-    max_liq_ratio: 0.50
+    max_liq_ratio: 0.35
