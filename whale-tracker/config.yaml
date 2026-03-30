@@ -68,7 +68,7 @@ log_level: INFO
 
 # === Momentum Monitor (feature branch) ===
 momentum:
-  enabled: false
+  enabled: true
 
   # Early trending channel
   early_channel_url: "https://t.me/s/solearlytrending"
@@ -87,14 +87,25 @@ momentum:
     # MC must increase by this % from trending entry
     min_mc_increase_pct: 50
 
+    # Maximum MC increase speed (% per minute) — filters out manipulation
+    # If token pumps faster than this, it's likely a coordinated dump
+    max_pump_speed_pct_per_min: 20
+
+    # Minimum time on watchlist before trigger (seconds)
+    # Let the dust settle before buying
+    min_watchlist_age_seconds: 300  # 5 minutes
+
     # Minimum volume per hour (USD)
     min_volume_per_hour: 50000
 
     # Minimum holder count
-    min_holders: 200
+    min_holders: 300
 
     # MC must be below this (too big = missed the move)
     max_mc: 500000
 
     # Minimum liquidity (USD)
     min_liquidity: 15000
+
+    # Minimum liquidity/market_cap ratio
+    min_liq_ratio: 0.10

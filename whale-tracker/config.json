@@ -1,0 +1,55 @@
+{
+  "min_sol": 3.0,
+  "alert_min_sol": 5.0,
+  "min_wallet_balance": 150.0,
+  "min_mc": 50000,
+  "max_mc": 500000,
+  "min_liquidity": 10000,
+  "min_liq_ratio": 0.05,
+  "min_position_pct": 0.01,
+  "dedup_window_minutes": 0,
+  "win_threshold": 30.0,
+  "scoring": {
+    "sol_5plus": 1,
+    "sol_10plus": 1,
+    "wallet_boost": 1,
+    "repeat_token": 1,
+    "mc_sweet_spot": 1,
+    "has_liquidity": 1,
+    "min_alert_score": 3
+  },
+  "check_intervals": [
+    300,
+    900
+  ],
+  "apis": {
+    "dexscreener": {
+      "base_url": "https://api.dexscreener.com",
+      "rate_limit_delay": 1.0
+    },
+    "geckoterminal": {
+      "base_url": "https://api.geckoterminal.com/api/v2",
+      "rate_limit_delay": 1.5
+    }
+  },
+  "network": "solana",
+  "database": "whale_tracker.db",
+  "log_level": "INFO",
+  "momentum": {
+    "enabled": true,
+    "early_channel_url": "https://t.me/s/solearlytrending",
+    "trending_poll_interval": 60,
+    "momentum_check_interval": 30,
+    "watchlist_ttl_minutes": 240,
+    "triggers": {
+      "min_mc_increase_pct": 50,
+      "max_pump_speed_pct_per_min": 20,
+      "min_watchlist_age_seconds": 300,
+      "min_volume_per_hour": 50000,
+      "min_holders": 300,
+      "max_mc": 500000,
+      "min_liquidity": 15000,
+      "min_liq_ratio": 0.1
+    }
+  }
+}
