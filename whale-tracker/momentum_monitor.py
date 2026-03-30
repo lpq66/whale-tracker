@@ -84,14 +84,18 @@ async def check_momentum(config: dict, db_path: str):
         check_count = token.get("check_count", 0)
 
         # Calculate time on watchlist
+        age_seconds = 999999  # fallback: treat as old enough
         if first_seen:
-            try:
-                seen_time = datetime.fromisoformat(first_seen.replace("Z", "+00:00"))
-                age_seconds = (datetime.now(timezone.utc) - seen_time).total_seconds()
-            except (ValueError, TypeError):
-                age_seconds = 999999
-        else:
-            age_seconds = 999999
+            for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    seen_time = datetime.strptime(first_seen, fmt)
+                    if seen_time.tzinfo is None:
+                        seen_time = seen_time.replace(tzinfo=timezone.utc)
+                    age_seconds = (datetime.now(timezone.utc) - seen_time).total_seconds()
+                    break
+                except (ValueError, TypeError):
+                    continue
+        age_seconds = max(age_seconds, 1)  # avoid division by zero
 
         data = await fetch_token_data(addr, prefer="dexscreener", rate_limit=rate_limit)
 
