@@ -64,9 +64,11 @@ async def check_momentum(config: dict, db_path: str):
     min_watchlist_age = triggers.get("min_watchlist_age_seconds", 300)
     min_volume_hr = triggers.get("min_volume_per_hour", 50000)
     min_holders = triggers.get("min_holders", 300)
+    min_mc = triggers.get("min_mc", 50000)
     max_mc = triggers.get("max_mc", 500000)
     min_liq = triggers.get("min_liquidity", 15000)
     min_liq_ratio = triggers.get("min_liq_ratio", 0.10)
+    max_liq_ratio = triggers.get("max_liq_ratio", 0.50)
 
     with db_session(db_path) as conn:
         watching = get_watchlist(conn, "watching")
@@ -141,9 +143,11 @@ async def check_momentum(config: dict, db_path: str):
         # Build trigger checks
         trigger_checks = {
             "mc_increase": mc_increase is not None and mc_increase >= min_mc_increase,
+            "mc_above_min": current_mc >= min_mc,
             "mc_below_max": current_mc <= max_mc,
             "has_liquidity": data.liquidity_usd is not None and data.liquidity_usd >= min_liq,
-            "liq_ratio": liq_ratio is not None and liq_ratio >= min_liq_ratio,
+            "liq_ratio_above_min": liq_ratio is not None and liq_ratio >= min_liq_ratio,
+            "liq_ratio_below_max": liq_ratio is not None and liq_ratio <= max_liq_ratio,
             "pump_speed_ok": pump_speed is None or pump_speed <= max_pump_speed,
             "watchlist_age": age_seconds >= min_watchlist_age,
         }
@@ -154,9 +158,9 @@ async def check_momentum(config: dict, db_path: str):
             reasons.append(f"mc_up_{mc_increase:.0f}%")
         if trigger_checks["has_liquidity"]:
             reasons.append(f"liq_${data.liquidity_usd:,.0f}")
-        if trigger_checks["liq_ratio"]:
+        if trigger_checks["liq_ratio_above_min"]:
             reasons.append(f"liq_ratio_{liq_ratio:.0%}")
-        if trigger_checks["mc_below_max"]:
+        if trigger_checks["mc_above_min"] and trigger_checks["mc_below_max"]:
             reasons.append("mc_in_range")
         if trigger_checks["pump_speed_ok"] and pump_speed is not None:
             reasons.append(f"speed_{pump_speed:.0f}%/min")

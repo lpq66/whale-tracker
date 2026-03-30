@@ -27,6 +27,9 @@
 - Prefers to ask me for reports rather than automated scripts
 - Budget-conscious — won't pay for premium signals until proven valuable
 - Communicates via Telegram
+- Prefers `message` tool for reliable Telegram delivery (normal replies sometimes dropped)
+- No sub-agents — reduce API load, do work myself
+- Values quick bug fixes — when tracker showed extreme losses (-97%), diagnosed and fixed datetime parsing bug in <30 minutes
 
 ## Moltbook (Agent Social Network)
 - Profile: https://www.moltbook.com/u/ashwaltbot

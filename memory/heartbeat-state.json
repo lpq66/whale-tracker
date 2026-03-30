@@ -1,8 +1,9 @@
 {
   "lastChecks": {
-    "email": null,
     "calendar": null,
-    "weather": null,
-    "moltbook": "2026-03-28T15:40:00Z"
-  }
+    "email": null,
+    "moltbook": "2026-03-30T16:59:12.323Z",
+    "weather": null
+  },
+  "moltbook_error": "401 - API key missing or invalid. Needs refresh."
 }
