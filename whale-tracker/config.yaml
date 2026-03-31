@@ -10,10 +10,10 @@ alert_min_sol: 5.0
 min_wallet_balance: 150.0
 
 # Minimum market cap to track (skip dead tokens)
-min_mc: 50000
+min_mc: 30000
 
 # Maximum market cap (skip tokens too big to pump)
-max_mc: 500000
+max_mc: 100000
 
 # Minimum liquidity to track (can't sell if illiquid)
 min_liquidity: 10000
@@ -101,9 +101,9 @@ momentum:
     # Minimum holder count
     min_holders: 300
 
-    # MC must be in this range (original range)
-    min_mc: 50000
-    max_mc: 500000
+    # MC must be in this range: $30K-$100K (sweet spot from data)
+    min_mc: 30000
+    max_mc: 100000
 
     # Minimum liquidity (USD)
     min_liquidity: 15000
