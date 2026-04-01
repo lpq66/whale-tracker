@@ -50,7 +50,8 @@
       "max_mc": 100000,
       "min_liquidity": 15000,
       "min_liq_ratio": 0.1
-    }
+    },
+    "telegram_alert_chat_id": "-1003898742925"
   },
   "telegram_alert_chat_id": "-1003898742925"
 }
