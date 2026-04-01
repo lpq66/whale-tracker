@@ -16,13 +16,44 @@ from db import (
 )
 from mc_fetcher import fetch_token_data
 from early_trending_scraper import scrape_new_trending_tokens
+import os
 
 logger = logging.getLogger("momentum")
 
 SIGNALS_FILE = Path(__file__).parent / "pending_signals.json"
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 
-def write_signal(signal: dict):
+def send_telegram_alert(signal: dict, chat_id: str):
+    """Send alert to Telegram group."""
+    if not TELEGRAM_BOT_TOKEN:
+        logger.warning("No TELEGRAM_BOT_TOKEN, skipping Telegram alert")
+        return
+    
+    import requests
+    token = TELEGRAM_BOT_TOKEN
+    sym = signal.get("token", "UNKNOWN")
+    mc = signal.get("mc", 0)
+    liq = signal.get("liquidity", 0)
+    liq_ratio = signal.get("liq_ratio", 0)
+    dex_url = signal.get("dex_url", "")
+    
+    text = f"🐋 WHALE SIGNAL\n\n{sym}\nMC: ${mc:,.0f}\nLiq: ${liq:,.0f} ({liq_ratio:.0%})\n\n{dex_url}"
+    
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = {"chat_id": chat_id, "text": text}
+    
+    try:
+        r = requests.post(url, json=data, timeout=10)
+        if r.ok:
+            logger.info(f"📱 Telegram alert sent for {sym}")
+        else:
+            logger.warning(f"Failed to send Telegram alert: {r.text}")
+    except Exception as e:
+        logger.warning(f"Telegram alert error: {e}")
+
+
+def write_signal(signal: dict, config: dict = None):
     """Write a buy signal to the pending signals file for alert delivery."""
     signals = []
     if SIGNALS_FILE.exists():
@@ -33,6 +64,21 @@ def write_signal(signal: dict):
 
     signals.append(signal)
     SIGNALS_FILE.write_text(json.dumps(signals, indent=2))
+    
+    # Send Telegram alert if signal matches our filters
+    if config:
+        tg_chat_id = config.get("telegram_alert_chat_id")
+        mc = signal.get("mc", 0)
+        liq = signal.get("liquidity", 0)
+        liq_ratio = liq / mc if mc > 0 else 0
+        
+        # Check if matches our sweet spot filters
+        mc_ok = 30000 <= mc <= 100000
+        liq_ok = 0.25 <= liq_ratio <= 0.35
+        min_liq = liq >= 15000
+        
+        if mc_ok and liq_ok and min_liq:
+            send_telegram_alert(signal, tg_chat_id)
 
 
 async def scan_early_trending(config: dict, db_path: str):
@@ -192,7 +238,7 @@ async def check_momentum(config: dict, db_path: str):
                 "reason": reason,
                 "dex_url": f"https://dexscreener.com/solana/{addr}",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+            }, config)
         else:
             # Log why it didn't trigger
             fails = [k for k, v in trigger_checks.items() if not v]
