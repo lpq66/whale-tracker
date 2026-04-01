@@ -49,7 +49,8 @@
       "min_holders": 300,
       "max_mc": 100000,
       "min_liquidity": 15000,
-      "min_liq_ratio": 0.1
+      "min_liq_ratio": 0.1,
+      "max_liq_ratio": 0.35
     },
     "telegram_alert_chat_id": "-1003898742925"
   },

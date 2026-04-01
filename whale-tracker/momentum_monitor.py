@@ -78,6 +78,7 @@ def write_signal(signal: dict, config: dict = None):
         min_liq = liq >= 15000
         
         if mc_ok and liq_ok and min_liq:
+            logger.info(f"📱 Sending Telegram alert for {signal.get('token')}")
             send_telegram_alert(signal, tg_chat_id)
 
 
