@@ -2,8 +2,8 @@
   "min_sol": 3.0,
   "alert_min_sol": 5.0,
   "min_wallet_balance": 150.0,
-  "min_mc": 50000,
-  "max_mc": 500000,
+  "min_mc": 30000,
+  "max_mc": 100000,
   "min_liquidity": 10000,
   "min_liq_ratio": 0.05,
   "min_position_pct": 0.01,
@@ -47,7 +47,7 @@
       "min_watchlist_age_seconds": 300,
       "min_volume_per_hour": 50000,
       "min_holders": 300,
-      "max_mc": 500000,
+      "max_mc": 100000,
       "min_liquidity": 15000,
       "min_liq_ratio": 0.1
     }
