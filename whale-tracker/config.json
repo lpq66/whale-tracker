@@ -1,14 +1,14 @@
 {
-  "min_sol": 3.0,
-  "alert_min_sol": 5.0,
-  "min_wallet_balance": 150.0,
-  "min_mc": 50000,
-  "max_mc": 500000,
+  "min_sol": 3,
+  "alert_min_sol": 5,
+  "min_wallet_balance": 150,
+  "min_mc": 30000,
+  "max_mc": 100000,
   "min_liquidity": 10000,
   "min_liq_ratio": 0.05,
   "min_position_pct": 0.01,
   "dedup_window_minutes": 0,
-  "win_threshold": 30.0,
+  "win_threshold": 30,
   "scoring": {
     "sol_5plus": 1,
     "sol_10plus": 1,
@@ -25,7 +25,7 @@
   "apis": {
     "dexscreener": {
       "base_url": "https://api.dexscreener.com",
-      "rate_limit_delay": 1.0
+      "rate_limit_delay": 1
     },
     "geckoterminal": {
       "base_url": "https://api.geckoterminal.com/api/v2",
@@ -47,9 +47,11 @@
       "min_watchlist_age_seconds": 300,
       "min_volume_per_hour": 50000,
       "min_holders": 300,
-      "max_mc": 500000,
+      "max_mc": 100000,
       "min_liquidity": 15000,
       "min_liq_ratio": 0.1
-    }
-  }
+    },
+    "telegram_alert_chat_id": "-1003898742925"
+  },
+  "telegram_alert_chat_id": "-1003898742925"
 }

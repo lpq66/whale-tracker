@@ -6,6 +6,10 @@
 - The openclaw process is managed by a supervisor process
 - Do not modify /root/.kilo
 
+## GitHub
+- Repo: https://github.com/lpq66/whale-tracker
+- Token provided by Walt for pushing
+
 <!-- BEGIN:kilo-cli -->
 
 ## Kilo CLI

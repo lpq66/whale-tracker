@@ -117,8 +117,26 @@ Even alerts that fail filters are valuable data. Created all_alerts table that l
 ### Suggested Action
 Always maintain an unfiltered log alongside filtered results in data collection systems.
 
+---
+
+## [LRN-20260328-006] insight
+
+**Logged**: 2026-03-28T19:02:00Z
+**Priority**: medium
+**Status**: promoted
+**Area**: config
+
+### Summary
+Cron jobs with `--session isolated` don't deliver to Telegram — use `--session main` for chat delivery
+
+### Details
+When creating cron jobs that need to deliver messages to Telegram, isolated sessions lack the delivery context. Use `--session main` with `--system-event` to inject into the main conversation, which has full Telegram routing.
+
+### Suggested Action
+Always use `--session main` for cron jobs that need to notify the user via chat.
+
 ### Metadata
-- Source: design_decision
-- Related Files: whale-tracker/db.py, whale-tracker/tracker.py
-- Tags: data-collection, pattern-analysis
-- Pattern-Key: data.log_all_filter_results
+- Source: debugging
+- Related Files: openclaw cron
+- Tags: cron, delivery, telegram, openclaw
+- Pattern-Key: openclaw.cron_delivery_needs_main_session

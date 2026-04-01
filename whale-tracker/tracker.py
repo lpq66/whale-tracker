@@ -6,6 +6,7 @@ Orchestrates channel scraping, MC checking, scoring, and stats.
 import asyncio
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from datetime import datetime, timezone
@@ -344,6 +345,19 @@ def cli_watch(db_path: str = "whale_tracker.db"):
     """Run scraper + MC checker loop."""
     config = load_config()
     init_db(db_path)
+
+    # Send startup alert to Telegram
+    tg_chat = config.get("telegram_alert_chat_id")
+    if tg_chat:
+        try:
+            import httpx
+            token = os.environ.get("TELEGRAM_BOT_TOKEN")
+            if token:
+                text = "🐋 Whale Tracker Started\n\nMonitoring for whale alerts and momentum signals..."
+                httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
+                          json={"chat_id": tg_chat, "text": text}, timeout=10)
+        except Exception as e:
+            logger.warning(f"Startup Telegram alert failed: {e}")
 
     async def on_alert(alert):
         await process_alert(alert, config, db_path)
