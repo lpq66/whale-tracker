@@ -425,9 +425,19 @@ async def check_momentum_alerts(db_path: str):
     """Check momentum alerts at 5min and 15min."""
     from db import get_db
     from mc_fetcher import fetch_token_data
+    import os
     
     conn = get_db(db_path)
     cursor = conn.cursor()
+    
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = None
+    if token:
+        # Get chat_id from config
+        import json
+        with open("config.json") as f:
+            config = json.load(f)
+            chat_id = config.get("telegram_alert_chat_id")
     
     try:
         # Get alerts pending 5m check
@@ -450,6 +460,14 @@ async def check_momentum_alerts(db_path: str):
                     SET mc_5m = ?, pct_change_5m = ?, checked_5m_at = datetime('now')
                     WHERE id = ?
                 """, (mc_5m, pct, id))
+                
+                # Send 5min update to Telegram
+                if token and chat_id:
+                    import httpx
+                    icon = "📈" if pct > 0 else "📉"
+                    text = f"📊 {sym} 5m Update\n\nMC: ${mc_5m:,.0f} ({pct:+.1f}%) {icon}"
+                    httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
+                              json={"chat_id": chat_id, "text": text}, timeout=10)
         
         # Get alerts pending 15m check
         cursor.execute("""
@@ -471,6 +489,14 @@ async def check_momentum_alerts(db_path: str):
                     SET mc_15m = ?, pct_change_15m = ?, checked_15m_at = datetime('now')
                     WHERE id = ?
                 """, (mc_15m, pct, id))
+                
+                # Send 15min update to Telegram
+                if token and chat_id:
+                    import httpx
+                    icon = "📈" if pct > 0 else "📉"
+                    text = f"📊 {sym} 15m Update\n\nMC: ${mc_15m:,.0f} ({pct:+.1f}%) {icon}"
+                    httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
+                              json={"chat_id": chat_id, "text": text}, timeout=10)
         
         conn.commit()
     finally:
