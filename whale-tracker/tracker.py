@@ -173,6 +173,21 @@ async def process_alert(alert, config: dict, db_path: str):
     with db_session(db_path) as conn:
         trade_id = insert_trade(conn, trade)
         if trade_id:
+            # Send Telegram alert for whale buy
+            tg_chat = config.get("telegram_alert_chat_id")
+            if tg_chat:
+                try:
+                    import httpx
+                    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+                    if token and score >= 3:
+                        symbol = alert.token_symbol or alert.token_address[:12]
+                        dex_url = f"https://dexscreener.com/solana/{alert.token_address}"
+                        text = f"🐋 WHALE BUY\n\n{symbol}\nSOL: {alert.sol_amount}\nMC: ${entry_mc:,.0f}\nLiq: ${data.liquidity_usd:,.0f}\nScore: {score}/5\n\n{dex_url}"
+                        httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
+                                  json={"chat_id": tg_chat, "text": text}, timeout=10)
+                except Exception as e:
+                    logger.warning(f"Trade Telegram alert failed: {e}")
+                    
             insert_mc_snapshot(conn, {
                 "token_address": alert.token_address,
                 "market_cap": entry_mc,
