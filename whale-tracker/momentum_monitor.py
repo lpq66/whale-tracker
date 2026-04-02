@@ -30,7 +30,7 @@ def send_telegram_alert(signal: dict, chat_id: str):
         logger.warning("No TELEGRAM_BOT_TOKEN, skipping Telegram alert")
         return
     
-    import requests
+    import httpx
     token = TELEGRAM_BOT_TOKEN
     sym = signal.get("token", "UNKNOWN")
     mc = signal.get("mc", 0)
@@ -44,7 +44,11 @@ def send_telegram_alert(signal: dict, chat_id: str):
     data = {"chat_id": chat_id, "text": text}
     
     try:
-        r = requests.post(url, json=data, timeout=10)
+        r = httpx.post(url, json=data, timeout=10)
+        if r.status_code == 200:
+            logger.info(f"✅ Telegram alert sent for {sym}")
+        else:
+            logger.warning(f"Failed to send Telegram alert: {r.status_code} - {r.text}")
         if r.ok:
             logger.info(f"📱 Telegram alert sent for {sym}")
         else:
