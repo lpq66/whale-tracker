@@ -251,15 +251,6 @@ async def check_momentum(config: dict, db_path: str):
                 mc = current_mc
                 liq = data.liquidity_usd
                 ratio = liq/mc if mc > 0 else 0
-                if 30000 <= mc <= 200000 and 0.20 <= ratio <= 0.40 and liq >= 10000:
-                    logger.info(f"📱 DEBUG: Sending alert for {sym} (MC ${mc:,.0f}, liq_ratio {ratio:.0%})")
-                    send_telegram_alert({
-                        "token": sym,
-                        "mc": mc,
-                        "liquidity": liq,
-                        "liq_ratio": ratio,
-                        "dex_url": f"https://dexscreener.com/solana/{addr}"
-                    }, config.get("telegram_alert_chat_id"))
         else:
             # Log why it didn't trigger
             fails = [k for k, v in trigger_checks.items() if not v]
