@@ -58,7 +58,7 @@ def send_telegram_alert(signal: dict, chat_id: str):
         logger.warning(f"Telegram alert error: {e}")
 
 
-def write_signal(signal: dict, config: dict = None):
+def write_signal(signal: dict, config: dict = None, db_path: str = None):
     """Write a buy signal to the pending signals file for alert delivery."""
     signals = []
     if SIGNALS_FILE.exists():
@@ -85,6 +85,9 @@ def write_signal(signal: dict, config: dict = None):
         if mc_ok and liq_ok and min_liq:
             logger.info(f"📱 Sending Telegram alert for {signal.get('token')}")
             send_telegram_alert(signal, tg_chat_id)
+            # Track for 5min/15min stats
+            if db_path:
+                save_momentum_alert(signal, db_path)
 
 
 async def scan_early_trending(config: dict, db_path: str):
@@ -244,7 +247,7 @@ async def check_momentum(config: dict, db_path: str):
                 "reason": reason,
                 "dex_url": f"https://dexscreener.com/solana/{addr}",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-            }, config)
+            }, config, db_path)
             
             # Also try sending directly (for debugging)
             if all(trigger_checks.values()):
@@ -374,6 +377,9 @@ async def run_momentum_monitor(config: dict, db_path: str, poll_interval: int = 
 
             # Check prices for triggered tokens (5m/15m follow-up)
             await check_triggered_prices(momentum_config, db_path)
+            
+            # Check momentum alerts at 5m/15m
+            await check_momentum_alerts(db_path)
 
             # Log watchlist status
             with db_session(db_path) as conn:
@@ -389,3 +395,83 @@ async def run_momentum_monitor(config: dict, db_path: str, poll_interval: int = 
             logger.error(f"Momentum monitor error: {e}")
 
         await asyncio.sleep(momentum_interval)
+
+
+def save_momentum_alert(signal: dict, db_path: str):
+    """Save momentum alert to DB for 5min/15min tracking."""
+    from db import get_db
+    
+    sym = signal.get("token", "")
+    addr = signal.get("address", "")
+    entry_mc = signal.get("mc", 0)
+    liq = signal.get("liquidity", 0)
+    
+    if not sym or not addr:
+        return
+    
+    conn = get_db(db_path)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO momentum_alerts (token_address, token_symbol, entry_mc, entry_liquidity)
+            VALUES (?, ?, ?, ?)
+        """, (addr, sym, entry_mc, liq))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def check_momentum_alerts(db_path: str):
+    """Check momentum alerts at 5min and 15min."""
+    from db import get_db
+    from mc_fetcher import fetch_token_data
+    
+    conn = get_db(db_path)
+    cursor = conn.cursor()
+    
+    try:
+        # Get alerts pending 5m check
+        cursor.execute("""
+            SELECT id, token_address, token_symbol, entry_mc, created_at
+            FROM momentum_alerts
+            WHERE checked_5m_at IS NULL
+            AND datetime(created_at, '+5 minutes') <= datetime('now')
+        """)
+        alerts_5m = cursor.fetchall()
+        
+        for row in alerts_5m:
+            id, addr, sym, entry_mc, created_at = row
+            data = fetch_token_data(addr)
+            if data and data.liquidity_usd:
+                mc_5m = data.liquidity_usd
+                pct = ((mc_5m - entry_mc) / entry_mc * 100) if entry_mc > 0 else 0
+                cursor.execute("""
+                    UPDATE momentum_alerts 
+                    SET mc_5m = ?, pct_change_5m = ?, checked_5m_at = datetime('now')
+                    WHERE id = ?
+                """, (mc_5m, pct, id))
+        
+        # Get alerts pending 15m check
+        cursor.execute("""
+            SELECT id, token_address, token_symbol, entry_mc, created_at
+            FROM momentum_alerts
+            WHERE checked_15m_at IS NULL
+            AND datetime(created_at, '+15 minutes') <= datetime('now')
+        """)
+        alerts_15m = cursor.fetchall()
+        
+        for row in alerts_15m:
+            id, addr, sym, entry_mc, created_at = row
+            data = fetch_token_data(addr)
+            if data and data.liquidity_usd:
+                mc_15m = data.liquidity_usd
+                pct = ((mc_15m - entry_mc) / entry_mc * 100) if entry_mc > 0 else 0
+                cursor.execute("""
+                    UPDATE momentum_alerts 
+                    SET mc_15m = ?, pct_change_15m = ?, checked_15m_at = datetime('now')
+                    WHERE id = ?
+                """, (mc_15m, pct, id))
+        
+        conn.commit()
+    finally:
+        conn.close()
