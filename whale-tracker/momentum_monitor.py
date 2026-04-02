@@ -441,7 +441,7 @@ async def check_momentum_alerts(db_path: str):
         
         for row in alerts_5m:
             id, addr, sym, entry_mc, created_at = row
-            data = fetch_token_data(addr)
+            data = await fetch_token_data(addr)
             if data and data.liquidity_usd:
                 mc_5m = data.liquidity_usd
                 pct = ((mc_5m - entry_mc) / entry_mc * 100) if entry_mc > 0 else 0
@@ -462,7 +462,7 @@ async def check_momentum_alerts(db_path: str):
         
         for row in alerts_15m:
             id, addr, sym, entry_mc, created_at = row
-            data = fetch_token_data(addr)
+            data = await fetch_token_data(addr)
             if data and data.liquidity_usd:
                 mc_15m = data.liquidity_usd
                 pct = ((mc_15m - entry_mc) / entry_mc * 100) if entry_mc > 0 else 0
