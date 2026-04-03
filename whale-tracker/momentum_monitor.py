@@ -85,9 +85,7 @@ def write_signal(signal: dict, config: dict = None, db_path: str = None):
         if mc_ok and liq_ok and min_liq:
             logger.info(f"📱 Sending Telegram alert for {signal.get('token')}")
             send_telegram_alert(signal, tg_chat_id)
-            # Track for 5min/15min stats
-            if db_path:
-                save_momentum_alert(signal, db_path)
+            # Don't track here - only track when whale actually buys (tracked in trades table)
 
 
 async def scan_early_trending(config: dict, db_path: str):

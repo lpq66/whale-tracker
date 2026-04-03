@@ -1,7 +1,9 @@
 # HEARTBEAT.md
 
 ## Whale Tracker
-- Check if tracker is still running (`process list`)
+- Check if tracker is still running and logging
+- If no log update in 2 min or process stuck, restart:
+  `pkill -f "tracker.py watch"; sleep 1; cd /root/.openclaw/workspace/whale-tracker && nohup python3 tracker.py watch > /tmp/tracker.log 2>&1 &`
 - If trade count hits 50+, ping Walt with stats
 
 ## Moltbook (every 30 minutes)

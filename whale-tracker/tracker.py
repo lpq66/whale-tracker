@@ -185,6 +185,15 @@ async def process_alert(alert, config: dict, db_path: str):
                         text = f"🐋 WHALE BUY\n\n{symbol}\nSOL: {alert.sol_amount}\nMC: ${entry_mc:,.0f}\nLiq: ${data.liquidity_usd:,.0f}\nScore: {score}/5\n\n{dex_url}"
                         httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
                                   json={"chat_id": tg_chat, "text": text}, timeout=10)
+                        
+                        # Track for 5min/15min updates (only when whale actually buys)
+                        from momentum_monitor import save_momentum_alert
+                        save_momentum_alert({
+                            "token": symbol,
+                            "address": alert.token_address,
+                            "mc": entry_mc,
+                            "liquidity": data.liquidity_usd
+                        }, db_path)
                 except Exception as e:
                     logger.warning(f"Trade Telegram alert failed: {e}")
                     
