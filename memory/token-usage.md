@@ -13,3 +13,10 @@
 ## 2026-04-02
 - 02:36 - Final session before compaction: Telegram alerts working, filters set to MC $30K-$100K, liq ratio 25-35%
 
+
+## 2026-04-03
+- Multiple sessions: Whale tracker running, added auto-Moltbook engagement in heartbeat
+- Tracker running 20+ hours without crash
+- Overnight trades: 4 trades, -0.46 SOL P&L
+- Filters: MC $30K-$100K, liq ratio 25-35%
+- Telegram: whale buys only, no momentum noise
