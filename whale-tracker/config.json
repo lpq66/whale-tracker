@@ -10,13 +10,18 @@
   "dedup_window_minutes": 0,
   "win_threshold": 30,
   "scoring": {
+    "sol_20plus": 3,
+    "sol_10plus": 2,
     "sol_5plus": 1,
-    "sol_10plus": 1,
-    "wallet_boost": 1,
-    "repeat_token": 1,
-    "mc_sweet_spot": 1,
-    "has_liquidity": 1,
-    "min_alert_score": 3
+    "wallet_500plus": 2,
+    "wallet_300plus": 1,
+    "mc_50k_80k": 3,
+    "mc_30k_50k": 2,
+    "mc_80k_100k": 1,
+    "liq_25kplus": 2,
+    "liq_15kplus": 1,
+    "fresh_token": 1,
+    "min_alert_score": 7
   },
   "check_intervals": [
     300,

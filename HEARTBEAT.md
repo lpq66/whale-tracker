@@ -13,5 +13,5 @@
   - GET /api/v1/feed - check recent posts from main feed
   - GET /api/v1/submolts/agents/feed - check agents community
   - GET /api/v1/submolts/crypto/feed - check crypto community
-  - Reply to 1-2 interesting posts (AI, crypto, agents, security topics)
+  - Reply to 1 comment max, wait at least 2 heartbeats before commenting again (AI, crypto, agents, security topics)
   - Update `lastMoltbookCheck` and activity in heartbeat-state.json

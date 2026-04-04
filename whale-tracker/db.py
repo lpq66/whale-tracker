@@ -280,33 +280,46 @@ def compute_score(
     token_address: str,
     config: dict
 ) -> int:
-    """Compute alert score based on multiple signals."""
+    """Compute alert score based on multiple signals - NEW TIERED SCORING."""
     scoring = config.get("scoring", {})
     score = 0
 
-    # SOL amount tiers (stackable)
-    if sol_amount >= 5:
+    # SOL amount (tiered, max 3 pts)
+    if sol_amount >= 20:
+        score += scoring.get("sol_20plus", 3)
+    elif sol_amount >= 10:
+        score += scoring.get("sol_10plus", 2)
+    elif sol_amount >= 5:
         score += scoring.get("sol_5plus", 1)
-    if sol_amount >= 10:
-        score += scoring.get("sol_10plus", 1)
 
-    # Big wallet
-    if wallet_balance and wallet_balance >= 200:
-        score += scoring.get("wallet_boost", 1)
+    # Wallet size (tiered, max 2 pts)
+    if wallet_balance and wallet_balance >= 500:
+        score += scoring.get("wallet_500plus", 2)
+    elif wallet_balance and wallet_balance >= 300:
+        score += scoring.get("wallet_300plus", 1)
 
-    # Repeat token
-    if token_seen_before(conn, token_address):
-        score += scoring.get("repeat_token", 1)
+    # MC sweet spot (tiered, max 3 pts)
+    if entry_mc:
+        if 50000 <= entry_mc <= 80000:
+            score += scoring.get("mc_50k_80k", 3)
+        elif 30000 <= entry_mc < 50000:
+            score += scoring.get("mc_30k_50k", 2)
+        elif 80000 < entry_mc <= 100000:
+            score += scoring.get("mc_80k_100k", 1)
 
-    # MC sweet spot ($50K - $500K)
-    if entry_mc and 50000 <= entry_mc <= 500000:
-        score += scoring.get("mc_sweet_spot", 1)
+    # Liquidity (tiered, max 2 pts)
+    if entry_liquidity:
+        if entry_liquidity >= 25000:
+            score += scoring.get("liq_25kplus", 2)
+        elif entry_liquidity >= 15000:
+            score += scoring.get("liq_15kplus", 1)
 
-    # Has liquidity
-    if entry_liquidity and entry_liquidity > 10000:
-        score += scoring.get("has_liquidity", 1)
+    # Fresh token bonus (max 1 pt) - NOT repeat
+    if not token_seen_before(conn, token_address):
+        score += scoring.get("fresh_token", 1)
 
     return score
+
 
 
 def compute_tier(sol_amount: float) -> str:
