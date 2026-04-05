@@ -179,10 +179,10 @@ async def process_alert(alert, config: dict, db_path: str):
                 try:
                     import httpx
                     token = os.environ.get("TELEGRAM_BOT_TOKEN")
-                    if token and score >= 3:
+                    if token and score >= 7:
                         symbol = alert.token_symbol or alert.token_address[:12]
                         dex_url = f"https://dexscreener.com/solana/{alert.token_address}"
-                        text = f"🐋 WHALE BUY\n\n{symbol}\nSOL: {alert.sol_amount}\nMC: ${entry_mc:,.0f}\nLiq: ${data.liquidity_usd:,.0f}\nScore: {score}/5\n\n{dex_url}"
+                        text = f"🐋 WHALE BUY\n\n{symbol}\nSOL: {alert.sol_amount}\nMC: ${entry_mc:,.0f}\nLiq: ${data.liquidity_usd:,.0f}\nScore: {score}/12\n\n{dex_url}"
                         httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
                                   json={"chat_id": tg_chat, "text": text}, timeout=10)
                         

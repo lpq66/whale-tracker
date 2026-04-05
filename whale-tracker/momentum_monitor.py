@@ -50,10 +50,6 @@ def send_telegram_alert(signal: dict, chat_id: str):
             logger.info(f"✅ Telegram alert sent for {sym}")
         else:
             logger.warning(f"Failed to send Telegram alert: {r.status_code} - {r.text}")
-        if r.ok:
-            logger.info(f"📱 Telegram alert sent for {sym}")
-        else:
-            logger.warning(f"Failed to send Telegram alert: {r.text}")
     except Exception as e:
         logger.warning(f"Telegram alert error: {e}")
 
