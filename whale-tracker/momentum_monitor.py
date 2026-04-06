@@ -47,7 +47,7 @@ def send_telegram_alert(signal: dict, chat_id: str):
     try:
         r = httpx.post(url, json=data, timeout=10)
         if r.status_code == 200:
-            logger.info(f"✅ Telegram alert sent for {sym}")
+            logger.warning(f"✅ Telegram alert SENT for {sym}")
         else:
             logger.warning(f"Failed to send Telegram alert: {r.status_code} - {r.text}")
     except Exception as e:
@@ -460,8 +460,12 @@ async def check_momentum_alerts(db_path: str):
                     import httpx
                     icon = "📈" if pct > 0 else "📉"
                     text = f"📊 {sym} 5m Update\n\nMC: ${mc_5m:,.0f} ({pct:+.1f}%) {icon}"
-                    httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
-                              json={"chat_id": chat_id, "text": text}, timeout=10)
+                    try:
+                        r = httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
+                                  json={"chat_id": chat_id, "text": text}, timeout=10)
+                        logger.warning(f"✅ 5m Telegram sent for {sym}: {r.status_code}")
+                    except Exception as e:
+                        logger.warning(f"❌ 5m Telegram failed for {sym}: {e}")
         
         # Get alerts pending 15m check
         cursor.execute("""
@@ -489,8 +493,12 @@ async def check_momentum_alerts(db_path: str):
                     import httpx
                     icon = "📈" if pct > 0 else "📉"
                     text = f"📊 {sym} 15m Update\n\nMC: ${mc_15m:,.0f} ({pct:+.1f}%) {icon}"
-                    httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
-                              json={"chat_id": chat_id, "text": text}, timeout=10)
+                    try:
+                        r = httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
+                                  json={"chat_id": chat_id, "text": text}, timeout=10)
+                        logger.warning(f"✅ 15m Telegram sent for {sym}: {r.status_code}")
+                    except Exception as e:
+                        logger.warning(f"❌ 15m Telegram failed for {sym}: {e}")
         
         conn.commit()
     finally:
