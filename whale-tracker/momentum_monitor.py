@@ -39,7 +39,7 @@ def send_telegram_alert(signal: dict, chat_id: str):
     dex_url = signal.get("dex_url", "")
     addr = signal.get("address", "")
     
-    text = f"🐋 WHALE SIGNAL\n\n{sym}\nMC: ${mc:,.0f}\nLiq: ${liq:,.0f} ({liq_ratio:.0%})\nAddress: {addr}\nDexScreener: {dex_url}"
+    text = f"📈 MOMENTUM SIGNAL\n\n{sym}\nMC: ${mc:,.0f}\nLiq: ${liq:,.0f} ({liq_ratio:.0%})\nAddress: {addr}\nDexScreener: {dex_url}"
     
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = {"chat_id": chat_id, "text": text}
