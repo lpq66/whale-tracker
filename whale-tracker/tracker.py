@@ -183,17 +183,23 @@ async def process_alert(alert, config: dict, db_path: str):
                         symbol = alert.token_symbol or alert.token_address[:12]
                         dex_url = f"https://dexscreener.com/solana/{alert.token_address}"
                         text = f"🐋 WHALE BUY\n\n{symbol}\nSOL: {alert.sol_amount}\nMC: ${entry_mc:,.0f}\nLiq: ${data.liquidity_usd:,.0f}\nScore: {score}/12\n\n{dex_url}"
-                        httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
-                                  json={"chat_id": tg_chat, "text": text}, timeout=10)
+                        try:
+                            httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
+                                      json={"chat_id": tg_chat, "text": text}, timeout=10)
+                        except Exception as e:
+                            logger.warning(f"Telegram alert failed: {e}")
                         
-                        # Track for 5min/15min updates (only when whale actually buys)
+                        # Track for 5min/15min updates (separate try - don't fail if Telegram fails)
                         from momentum_monitor import save_momentum_alert
-                        save_momentum_alert({
-                            "token": symbol,
-                            "address": alert.token_address,
-                            "mc": entry_mc,
-                            "liquidity": data.liquidity_usd
-                        }, db_path)
+                        try:
+                            save_momentum_alert({
+                                "token": symbol,
+                                "address": alert.token_address,
+                                "mc": entry_mc,
+                                "liquidity": data.liquidity_usd
+                            }, db_path)
+                        except Exception as e:
+                            logger.warning(f"Failed to save momentum alert: {e}")
                 except Exception as e:
                     logger.warning(f"Trade Telegram alert failed: {e}")
                     
