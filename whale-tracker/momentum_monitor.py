@@ -500,6 +500,41 @@ async def check_momentum_alerts(db_path: str):
                     except Exception as e:
                         logger.warning(f"❌ 15m Telegram failed for {sym}: {e}")
         
+        # Get alerts pending 1h check (ONLY if 15m was net positive)
+        cursor.execute("""
+            SELECT id, token_address, token_symbol, entry_mc, checked_15m_at
+            FROM momentum_alerts
+            WHERE checked_1h_at IS NULL
+            AND checked_15m_at IS NOT NULL
+            AND pct_change_15m > 0
+            AND datetime(created_at, '+60 minutes') <= datetime('now')
+        """)
+        alerts_1h = cursor.fetchall()
+        
+        for row in alerts_1h:
+            id, addr, sym, entry_mc, checked_15m_at = row
+            data = await fetch_token_data(addr)
+            if data and (data.market_cap or data.fdv):
+                mc_1h = data.market_cap or data.fdv
+                pct = ((mc_1h - entry_mc) / entry_mc * 100) if entry_mc > 0 else 0
+                cursor.execute("""
+                    UPDATE momentum_alerts 
+                    SET mc_1h = ?, pct_change_1h = ?, checked_1h_at = datetime('now')
+                    WHERE id = ?
+                """, (mc_1h, pct, id))
+                
+                # Send 1h update to Telegram
+                if token and chat_id:
+                    import httpx
+                    icon = "📈" if pct > 0 else "📉"
+                    text = f"📊 {sym} 1h Update\n\nMC: ${mc_1h:,.0f} ({pct:+.1f}%) {icon}"
+                    try:
+                        r = httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
+                                  json={"chat_id": chat_id, "text": text}, timeout=10)
+                        logger.warning(f"✅ 1h Telegram sent for {sym}: {r.status_code}")
+                    except Exception as e:
+                        logger.warning(f"❌ 1h Telegram failed for {sym}: {e}")
+
         conn.commit()
     finally:
         conn.close()
