@@ -178,48 +178,52 @@ async def scrape_channel(url: str = CHANNEL_URL) -> list[dict]:
 
 
 async def scrape_new_alerts(
-    url: str = CHANNEL_URL,
+    url: str = "https://t.me/s/solwhaletrending",
     min_sol: float = 3.0,
-) -> list[WhaleAlert]:
-    """
-    Scrape channel and return only new alerts (not seen before).
-    Filters by min SOL amount.
-    """
-    seen = load_seen()
+) -> list:
+    """Scrape channel and return only new alerts."""
+    import json
+    from pathlib import Path
+    from datetime import datetime, timezone
+    from alert_parser import WhaleAlert
+    
+    SEEN_FILE = Path("seen_messages.json")
+    if SEEN_FILE.exists():
+        seen = set(json.loads(SEEN_FILE.read_text()))
+    else:
+        seen = set()
+    
     raw_alerts = await scrape_channel(url)
     new_alerts = []
-
+    
     for alert in raw_alerts:
-        # Dedup by message_id
         msg_key = alert.get("message_id")
-        if msg_key and msg_key in seen:
+        if not msg_key:
             continue
-
-        if alert["sol_amount"] < min_sol:
+        if msg_key in seen:
             continue
-
-        timestamp = datetime.now(timezone.utc).isoformat()
-
-        whale_alert = WhaleAlert(
-            token_address=alert["token_address"],
-            token_symbol=alert["token_symbol"],
+            
+        sol = alert.get("sol_amount", 0)
+        if sol < min_sol:
+            continue
+        
+        wa = WhaleAlert(
+            token_address=alert.get("token_address"),
+            token_symbol=alert.get("token_symbol"),
             token_name=None,
             whale_address=None,
-            sol_amount=alert["sol_amount"],
-            market_cap=alert["market_cap"],
+            sol_amount=sol,
+            market_cap=alert.get("market_cap"),
             wallet_balance=alert.get("wallet_balance"),
-            timestamp=timestamp,
-            raw_text=alert["raw_text"],
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            raw_text=alert.get("raw_text"),
             message_id=msg_key,
         )
-
-        new_alerts.append(whale_alert)
-
-        # Mark as seen
-        if msg_key:
-            seen.add(msg_key)
-
-    save_seen(seen)
+        new_alerts.append(wa)
+        seen.add(msg_key)
+    
+    trimmed = sorted(seen)[-1000:]
+    SEEN_FILE.write_text(json.dumps(trimmed))
     return new_alerts
 
 

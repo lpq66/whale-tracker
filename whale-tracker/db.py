@@ -146,7 +146,7 @@ def init_db(db_path: str | Path | None = None):
 def insert_trade(conn: sqlite3.Connection, trade: dict) -> int:
     """Insert a new trade, return the row id."""
     cols = [
-        "message_id", "token_address", "token_symbol", "whale_address",
+        "message_id", "alert_type", "token_address", "token_symbol", "whale_address",
         "sol_amount", "wallet_balance", "entry_mc", "entry_liquidity",
         "entry_volume_24h", "entry_time", "score", "raw_alert"
     ]
@@ -351,6 +351,14 @@ def get_unchecked_trades(conn: sqlite3.Connection, interval: str = "5m") -> list
             AND datetime(entry_time) <= datetime('now', '-15 minutes')
             ORDER BY entry_time ASC
         """
+    elif interval == "1h":
+        query = """
+            SELECT * FROM trades
+            WHERE checked_1h_at IS NULL
+            AND checked_15m_at IS NOT NULL
+            AND datetime(entry_time) <= datetime('now', '-60 minutes')
+            ORDER BY entry_time ASC
+        """
     else:
         raise ValueError(f"Unknown interval: {interval}")
 
@@ -381,6 +389,14 @@ def update_trade_mc(
                 mc_15m = ?,
                 checked_15m_at = datetime('now'),
                 pct_change_15m = ?, result_15m = ?
+            WHERE id = ?
+        """, (market_cap, pct_change, result, trade_id))
+    elif interval == "1h":
+        conn.execute("""
+            UPDATE trades SET
+                mc_1h = ?,
+                checked_1h_at = datetime('now'),
+                pct_change_1h = ?, result_1h = ?
             WHERE id = ?
         """, (market_cap, pct_change, result, trade_id))
 

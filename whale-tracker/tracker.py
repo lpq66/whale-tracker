@@ -17,7 +17,10 @@ from db import (
     compute_score, compute_tier, insert_all_alert, token_seen_recently
 )
 from mc_fetcher import fetch_token_data, TokenData
-from channel_scraper import scrape_new_alerts, run_scraper_loop
+from channel_scraper import scrape_channel, run_scraper_loop
+from alert_parser import WhaleAlert
+from datetime import datetime, timezone
+from wallet_watcher import watch_wallets
 
 logging.basicConfig(
     level=logging.INFO,
@@ -155,8 +158,12 @@ async def process_alert(alert, config: dict, db_path: str):
     log_all(False, None, entry_mc=entry_mc, liq=data.liquidity_usd, vol=data.volume_24h)
 
     # --- Store trade ---
+    is_add = "accumulating" in alert.raw_text.lower() or "aped" in alert.raw_text.lower() if alert.raw_text else False
+    alert_type = "add" if is_add else "buy"
+    
     trade = {
         "message_id": alert.message_id,
+        "alert_type": alert_type,
         "token_address": alert.token_address,
         "token_symbol": alert.token_symbol,
         "whale_address": alert.whale_address,
@@ -179,7 +186,8 @@ async def process_alert(alert, config: dict, db_path: str):
                 try:
                     import httpx
                     token = os.environ.get("TELEGRAM_BOT_TOKEN")
-                    if token and score >= 7:
+                    min_alert_score = config.get("scoring", {}).get("min_alert_score", 5)
+                    if token and score >= min_alert_score:
                         symbol = alert.token_symbol or alert.token_address[:12]
                         dex_url = f"https://dexscreener.com/solana/{alert.token_address}"
                         text = f"🐋 WHALE BUY\n\n{symbol}\nSOL: {alert.sol_amount}\nMC: ${entry_mc:,.0f}\nLiq: ${data.liquidity_usd:,.0f}\nScore: {score}/12\n\n{dex_url}"
@@ -280,6 +288,60 @@ async def check_mc_prices(config: dict, db_path: str):
 
             icon = "✅" if result == "win" else "📉" if result == "loss" else "➡️"
             logger.info(f"  {symbol} @ {interval}: MC ${current_mc:,.0f} ({pct_change:+.1f}%) {icon}")
+            
+            # Send Telegram alert for 5m/15m updates
+            tg_chat = config.get("telegram_alert_chat_id")
+            if tg_chat:
+                try:
+                    import httpx
+                    import os
+                    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+                    if token:
+                        emoji = "🟢" if result == "win" else "🔴" if result == "loss" else "⚪"
+                        text = f"{emoji} {symbol} @ {interval}: MC ${current_mc:,.0f} ({pct_change:+.1f}%)"
+                        httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
+                                  json={"chat_id": tg_chat, "text": text}, timeout=10)
+                except Exception as e:
+                    logger.warning(f"5m/15m alert failed: {e}")
+
+
+
+async def check_volume_spikes(db_path: str, config: dict):
+    """Check if any active trades have volume spikes."""
+    from db import db_session
+    import os
+    import httpx
+    
+    THRESHOLD = 5.0
+    
+    with db_session(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, token_address, token_symbol, entry_volume_24h, entry_mc
+            FROM trades
+            WHERE datetime(entry_time) >= datetime('now', '-24 hours')
+            AND entry_volume_24h IS NOT NULL
+        """)
+        
+        for row in cursor.fetchall():
+            trade_id, addr, sym, entry_vol, entry_mc = row
+            data = await fetch_token_data(addr)
+            if not data or not data.volume_24h:
+                continue
+            
+            current_vol = data.volume_24h
+            if entry_vol and current_vol > entry_vol * THRESHOLD:
+                pct = ((current_vol - entry_vol) / entry_vol * 100)
+                tg_chat = config.get("telegram_alert_chat_id")
+                if tg_chat:
+                    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+                    if token:
+                        text = f"VOLUME SPIKE {sym}: \${entry_vol:,.0f} -> \${current_vol:,.0f} ({pct:+.0f}%)"
+                        try:
+                            httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", 
+                                      json={"chat_id": tg_chat, "text": text}, timeout=10)
+                        except:
+                            pass
 
 
 async def run_tracker(config: dict, db_path: str, poll_interval: int = 30):
@@ -395,6 +457,12 @@ def cli_watch(db_path: str = "whale_tracker.db"):
     async def _run():
         tasks = [
             asyncio.create_task(
+                check_volume_spikes(db_path, config)
+            ),
+            asyncio.create_task(
+                watch_wallets(config, db_path)
+            ),
+            asyncio.create_task(
                 run_scraper_loop(
                     poll_interval=30,
                     min_sol=config.get("min_sol", 10.0),
@@ -425,7 +493,7 @@ def cli_scrape_once(db_path: str = "whale_tracker.db"):
     init_db(db_path)
 
     async def _run():
-        alerts = await scrape_new_alerts(min_sol=config.get("min_sol", 10.0))
+        alerts = await custom_scrape_new_alerts(min_sol=config.get("min_sol", 10.0))
         print(f"Found {len(alerts)} new alerts")
         for alert in alerts:
             await process_alert(alert, config, db_path)
@@ -459,3 +527,31 @@ if __name__ == "__main__":
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
+
+# Custom working scraper
+async def custom_scrape_new_alerts(url="https://t.me/s/solwhaletrending", min_sol=3.0):
+    """Our working version"""
+    raw = await scrape_channel(url)
+    alerts = []
+    for a in raw:
+        msg = a.get("message_id")
+        if not msg:
+            continue
+        sol = a.get("sol_amount", 0)
+        if sol < min_sol:
+            continue
+        
+        wa = WhaleAlert(
+            token_address=a.get("token_address"),
+            token_symbol=a.get("token_symbol"),
+            token_name=None,
+            whale_address=None,
+            sol_amount=sol,
+            market_cap=a.get("market_cap"),
+            wallet_balance=a.get("wallet_balance"),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            raw_text=a.get("raw_text"),
+            message_id=msg
+        )
+        alerts.append(wa)
+    return alerts
